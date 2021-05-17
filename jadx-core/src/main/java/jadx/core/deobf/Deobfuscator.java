@@ -1,18 +1,9 @@
 package jadx.core.deobf;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,15 +11,17 @@ import org.slf4j.LoggerFactory;
 import jadx.api.JadxArgs;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.MethodOverrideAttr;
 import jadx.core.dex.attributes.nodes.SourceFileAttr;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.info.FieldInfo;
 import jadx.core.dex.info.MethodInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.nodes.ClassNode;
-import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.FieldNode;
 import jadx.core.dex.nodes.MethodNode;
+import jadx.core.dex.nodes.RootNode;
+import jadx.core.utils.kotlin.KotlinMetadataUtils;
 
 public class Deobfuscator {
 	private static final Logger LOG = LoggerFactory.getLogger(Deobfuscator.class);
@@ -37,25 +30,20 @@ public class Deobfuscator {
 
 	public static final String CLASS_NAME_SEPARATOR = ".";
 	public static final String INNER_CLASS_SEPARATOR = "$";
-	public static final String KOTLIN_METADATA_ANNOTATION = "kotlin.Metadata";
-	public static final String KOTLIN_METADATA_D2_PARAMETER = "d2";
-	public static final String KOTLIN_METADATA_CLASSNAME_REGEX = "(L.*;)";
 
 	private final JadxArgs args;
-	@NotNull
-	private final List<DexNode> dexNodes;
+	private final RootNode root;
 	private final DeobfPresets deobfPresets;
 
 	private final Map<ClassInfo, DeobfClsInfo> clsMap = new LinkedHashMap<>();
 	private final Map<FieldInfo, String> fldMap = new HashMap<>();
 	private final Map<MethodInfo, String> mthMap = new HashMap<>();
 
-	private final Map<MethodInfo, OverridedMethodsNode> ovrdMap = new HashMap<>();
-	private final List<OverridedMethodsNode> ovrd = new ArrayList<>();
-
 	private final PackageNode rootPackage = new PackageNode("");
 	private final Set<String> pkgSet = new TreeSet<>();
 	private final Set<String> reservedClsNames = new HashSet<>();
+
+	private final NavigableSet<MethodNode> mthProcessQueue = new TreeSet<>();
 
 	private final int maxLength;
 	private final int minLength;
@@ -67,28 +55,75 @@ public class Deobfuscator {
 	private int fldIndex = 0;
 	private int mthIndex = 0;
 
-	public Deobfuscator(JadxArgs args, @NotNull List<DexNode> dexNodes, Path deobfMapFile) {
-		this.args = args;
-		this.dexNodes = dexNodes;
+	public Deobfuscator(RootNode root) {
+		this.root = root;
+		this.args = root.getArgs();
 
 		this.minLength = args.getDeobfuscationMinLength();
 		this.maxLength = args.getDeobfuscationMaxLength();
 		this.useSourceNameAsAlias = args.isUseSourceNameAsClassAlias();
 		this.parseKotlinMetadata = args.isParseKotlinMetadata();
 
-		this.deobfPresets = new DeobfPresets(this, deobfMapFile);
+		this.deobfPresets = DeobfPresets.build(root);
 	}
 
 	public void execute() {
 		if (!args.isDeobfuscationForceSave()) {
 			deobfPresets.load();
+			for (Map.Entry<String, String> pkgEntry : deobfPresets.getPkgPresetMap().entrySet()) {
+				addPackagePreset(pkgEntry.getKey(), pkgEntry.getValue());
+			}
+			deobfPresets.getPkgPresetMap().clear(); // not needed anymore
 			initIndexes();
 		}
 		process();
 	}
 
 	public void savePresets() {
-		deobfPresets.save(args.isDeobfuscationForceSave());
+		Path deobfMapFile = deobfPresets.getDeobfMapFile();
+		if (Files.exists(deobfMapFile) && !args.isDeobfuscationForceSave()) {
+			LOG.warn("Deobfuscation map file '{}' exists. Use command line option '--deobf-rewrite-cfg' to rewrite it",
+					deobfMapFile.toAbsolutePath());
+			return;
+		}
+		try {
+			deobfPresets.clear();
+			fillDeobfPresets();
+			deobfPresets.save();
+		} catch (Exception e) {
+			LOG.error("Failed to save deobfuscation map file '{}'", deobfMapFile.toAbsolutePath(), e);
+		}
+	}
+
+	private void fillDeobfPresets() {
+		for (PackageNode p : getRootPackage().getInnerPackages()) {
+			for (PackageNode pp : p.getInnerPackages()) {
+				dfsPackageName(p.getName(), pp);
+			}
+			if (p.hasAlias()) {
+				deobfPresets.getPkgPresetMap().put(p.getName(), p.getAlias());
+			}
+		}
+		for (DeobfClsInfo deobfClsInfo : clsMap.values()) {
+			if (deobfClsInfo.getAlias() != null) {
+				deobfPresets.getClsPresetMap().put(deobfClsInfo.getCls().getClassInfo().makeRawFullName(), deobfClsInfo.getAlias());
+			}
+		}
+		for (FieldInfo fld : fldMap.keySet()) {
+			deobfPresets.getFldPresetMap().put(fld.getRawFullId(), fld.getAlias());
+		}
+		for (MethodInfo mth : mthMap.keySet()) {
+			deobfPresets.getMthPresetMap().put(mth.getRawFullId(), mth.getAlias());
+		}
+	}
+
+	private void dfsPackageName(String prefix, PackageNode node) {
+		for (PackageNode pp : node.getInnerPackages()) {
+			dfsPackageName(prefix + '.' + node.getName(), pp);
+		}
+		if (node.hasAlias()) {
+			deobfPresets.getPkgPresetMap().put(node.getName(), node.getAlias());
+		}
 	}
 
 	public void clear() {
@@ -96,9 +131,6 @@ public class Deobfuscator {
 		clsMap.clear();
 		fldMap.clear();
 		mthMap.clear();
-
-		ovrd.clear();
-		ovrdMap.clear();
 	}
 
 	private void initIndexes() {
@@ -109,15 +141,11 @@ public class Deobfuscator {
 	}
 
 	private void preProcess() {
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				Collections.addAll(reservedClsNames, cls.getPackage().split("\\."));
-			}
+		for (ClassNode cls : root.getClasses()) {
+			Collections.addAll(reservedClsNames, cls.getPackage().split("\\."));
 		}
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				preProcessClass(cls);
-			}
+		for (ClassNode cls : root.getClasses()) {
+			preProcessClass(cls);
 		}
 	}
 
@@ -126,104 +154,15 @@ public class Deobfuscator {
 		if (DEBUG) {
 			dumpAlias();
 		}
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				processClass(cls);
-			}
+		for (ClassNode cls : root.getClasses()) {
+			processClass(cls);
 		}
-		postProcess();
-	}
-
-	private void postProcess() {
-		int id = 1;
-		for (OverridedMethodsNode o : ovrd) {
-			boolean aliasFromPreset = false;
-			String aliasToUse = null;
-			for (MethodInfo mth : o.getMethods()) {
-				if (mth.isAliasFromPreset()) {
-					aliasToUse = mth.getAlias();
-					aliasFromPreset = true;
-				}
+		while (true) {
+			MethodNode next = mthProcessQueue.pollLast();
+			if (next == null) {
+				break;
 			}
-			for (MethodInfo mth : o.getMethods()) {
-				if (aliasToUse == null) {
-					if (mth.hasAlias() && !mth.isAliasFromPreset()) {
-						mth.setAlias(String.format("mo%d%s", id, prepareNamePart(mth.getName())));
-					}
-					aliasToUse = mth.getAlias();
-				}
-				mth.setAlias(aliasToUse);
-				mth.setAliasFromPreset(aliasFromPreset);
-			}
-			id++;
-		}
-	}
-
-	private void resolveOverriding(MethodNode mth) {
-		Set<ClassNode> clsParents = new LinkedHashSet<>();
-		collectClassHierarchy(mth.getParentClass(), clsParents);
-
-		String mthSignature = mth.getMethodInfo().makeSignature(false);
-		Set<MethodInfo> overrideSet = new LinkedHashSet<>();
-		for (ClassNode classNode : clsParents) {
-			MethodInfo methodInfo = getMthOverride(classNode.getMethods(), mthSignature);
-			if (methodInfo != null) {
-				overrideSet.add(methodInfo);
-			}
-		}
-		if (overrideSet.isEmpty()) {
-			return;
-		}
-		OverridedMethodsNode overrideNode = getOverrideMethodsNode(overrideSet);
-		if (overrideNode == null) {
-			overrideNode = new OverridedMethodsNode(overrideSet);
-			ovrd.add(overrideNode);
-		}
-		for (MethodInfo overrideMth : overrideSet) {
-			if (!ovrdMap.containsKey(overrideMth)) {
-				ovrdMap.put(overrideMth, overrideNode);
-				overrideNode.add(overrideMth);
-			}
-		}
-	}
-
-	private OverridedMethodsNode getOverrideMethodsNode(Set<MethodInfo> overrideSet) {
-		for (MethodInfo overrideMth : overrideSet) {
-			OverridedMethodsNode node = ovrdMap.get(overrideMth);
-			if (node != null) {
-				return node;
-			}
-		}
-		return null;
-	}
-
-	private MethodInfo getMthOverride(List<MethodNode> methods, String mthSignature) {
-		for (MethodNode m : methods) {
-			MethodInfo mthInfo = m.getMethodInfo();
-			if (mthInfo.getShortId().startsWith(mthSignature)) {
-				return mthInfo;
-			}
-		}
-		return null;
-	}
-
-	private void collectClassHierarchy(ClassNode cls, Set<ClassNode> collected) {
-		boolean added = collected.add(cls);
-		if (added) {
-			ArgType superClass = cls.getSuperClass();
-			if (superClass != null) {
-				ClassNode superNode = cls.dex().resolveClass(superClass);
-				if (superNode != null) {
-					collectClassHierarchy(superNode, collected);
-				}
-			}
-
-			for (ArgType argType : cls.getInterfaces()) {
-				ClassNode interfaceNode = cls.dex().resolveClass(argType);
-				if (interfaceNode != null) {
-					collectClassHierarchy(interfaceNode, collected);
-				}
-			}
+			renameMethod(next);
 		}
 	}
 
@@ -252,9 +191,8 @@ public class Deobfuscator {
 			}
 			renameField(field);
 		}
-		for (MethodNode mth : cls.getMethods()) {
-			renameMethod(mth);
-		}
+		mthProcessQueue.addAll(cls.getMethods());
+
 		for (ClassNode innerCls : cls.getInnerClasses()) {
 			processClass(innerCls);
 		}
@@ -273,20 +211,40 @@ public class Deobfuscator {
 	}
 
 	private void renameMethod(MethodNode mth) {
+		MethodInfo mthInfo = mth.getMethodInfo();
+		Set<String> names = deobfPresets.getForVars(mthInfo);
+		if (names != null) {
+			mthInfo.setVarNameMap(names);
+		}
 		String alias = getMethodAlias(mth);
 		if (alias != null) {
-			mth.getMethodInfo().setAlias(alias);
-		}
-		if (mth.isVirtual()) {
-			resolveOverriding(mth);
+			applyMethodAlias(mth, alias);
 		}
 	}
 
 	public void forceRenameMethod(MethodNode mth) {
-		mth.getMethodInfo().setAlias(makeMethodAlias(mth));
-		if (mth.isVirtual()) {
-			resolveOverriding(mth);
+		String alias = makeMethodAlias(mth);
+		applyMethodAlias(mth, alias);
+	}
+
+	private void applyMethodAlias(MethodNode mth, String alias) {
+		setSingleMethodAlias(mth, alias);
+
+		MethodOverrideAttr overrideAttr = mth.get(AType.METHOD_OVERRIDE);
+		if (overrideAttr != null) {
+			for (MethodNode ovrdMth : overrideAttr.getRelatedMthNodes()) {
+				if (ovrdMth != mth) {
+					setSingleMethodAlias(ovrdMth, alias);
+				}
+			}
 		}
+	}
+
+	private void setSingleMethodAlias(MethodNode mth, String alias) {
+		MethodInfo mthInfo = mth.getMethodInfo();
+		mthInfo.setAlias(alias);
+		mthMap.put(mthInfo, alias);
+		mthProcessQueue.remove(mth);
 	}
 
 	public void addPackagePreset(String origPkgName, String pkgAlias) {
@@ -359,9 +317,9 @@ public class Deobfuscator {
 		} else {
 			if (!clsMap.containsKey(classInfo)) {
 				String clsShortName = classInfo.getShortName();
-				if (shouldRename(clsShortName) || reservedClsNames.contains(clsShortName)) {
-					makeClsAlias(cls);
-				}
+				boolean badName = shouldRename(clsShortName)
+						|| (args.isRenameValid() && reservedClsNames.contains(clsShortName));
+				makeClsAlias(cls, badName);
 			}
 		}
 		for (ClassNode innerCls : cls.getInnerClasses()) {
@@ -374,12 +332,12 @@ public class Deobfuscator {
 		if (deobfClsInfo != null) {
 			return deobfClsInfo.getAlias();
 		}
-		return makeClsAlias(cls);
+		return makeClsAlias(cls, true);
 	}
 
 	public String getPkgAlias(ClassNode cls) {
 		ClassInfo classInfo = cls.getClassInfo();
-		PackageNode pkg = null;
+		PackageNode pkg;
 		DeobfClsInfo deobfClsInfo = clsMap.get(classInfo);
 		if (deobfClsInfo != null) {
 			pkg = deobfClsInfo.getPkg();
@@ -395,59 +353,92 @@ public class Deobfuscator {
 		}
 	}
 
-	private String makeClsAlias(ClassNode cls) {
-		ClassInfo classInfo = cls.getClassInfo();
-
-		String metadataClassName = "";
-		String metadataPackageName = "";
+	private String makeClsAlias(ClassNode cls, boolean badName) {
+		String alias = null;
+		String pkgName = null;
 		if (this.parseKotlinMetadata) {
-			String rawClassName = getRawClassNameFromMetadata(cls);
-			if (rawClassName != null) {
-				metadataClassName = rawClassName.substring(rawClassName.lastIndexOf(".") + 1, rawClassName.length() - 1);
-				if (rawClassName.lastIndexOf(".") != -1) {
-					metadataPackageName = rawClassName.substring(1, rawClassName.lastIndexOf("."));
-				}
+			ClassInfo kotlinCls = KotlinMetadataUtils.getClassName(cls);
+			if (kotlinCls != null) {
+				alias = prepareNameFull(kotlinCls.getShortName(), "C");
+				pkgName = kotlinCls.getPackage();
 			}
 		}
-		String alias = null;
-
-		if (this.useSourceNameAsAlias) {
+		if (alias == null && this.useSourceNameAsAlias) {
 			alias = getAliasFromSourceFile(cls);
 		}
 
+		ClassInfo classInfo = cls.getClassInfo();
 		if (alias == null) {
-			if (metadataClassName.isEmpty()) {
+			if (badName) {
 				String clsName = classInfo.getShortName();
-				alias = String.format("C%04d%s", clsIndex++, prepareNamePart(clsName));
+				String prefix = makeClsPrefix(cls);
+				alias = String.format("%sC%04d%s", prefix, clsIndex++, prepareNamePart(clsName));
 			} else {
-				alias = metadataClassName;
+				// rename not needed
+				return classInfo.getShortName();
 			}
 		}
-		PackageNode pkg;
-		if (metadataPackageName.isEmpty()) {
-			pkg = getPackageNode(classInfo.getPackage(), true);
-		} else {
-			pkg = getPackageNode(metadataPackageName, true);
+		if (pkgName == null) {
+			pkgName = classInfo.getPackage();
 		}
+		PackageNode pkg = getPackageNode(pkgName, true);
 		clsMap.put(classInfo, new DeobfClsInfo(this, cls, pkg, alias));
 		return alias;
 	}
 
-	@Nullable
-	private String getRawClassNameFromMetadata(ClassNode cls) {
-		if (cls.getAnnotation(KOTLIN_METADATA_ANNOTATION) != null
-				&& cls.getAnnotation(KOTLIN_METADATA_ANNOTATION).getValues().get(KOTLIN_METADATA_D2_PARAMETER) != null
-				&& cls.getAnnotation(KOTLIN_METADATA_ANNOTATION).getValues().get(KOTLIN_METADATA_D2_PARAMETER) instanceof List) {
-			Object rawClassNameObject =
-					((List) cls.getAnnotation(KOTLIN_METADATA_ANNOTATION).getValues().get(KOTLIN_METADATA_D2_PARAMETER)).get(0);
-			if (rawClassNameObject instanceof String) {
-				String rawClassName = ((String) rawClassNameObject).trim().replace("/", ".");
-				if (rawClassName.length() > 1 && rawClassName.matches(KOTLIN_METADATA_CLASSNAME_REGEX)) {
-					return rawClassName;
+	/**
+	 * Generate a prefix for a class name that bases on certain class properties, certain
+	 * extended superclasses or implemented interfaces.
+	 */
+	private String makeClsPrefix(ClassNode cls) {
+		if (cls.isEnum()) {
+			return "Enum";
+		}
+		String result = "";
+		if (cls.getAccessFlags().isAbstract()) {
+			result += "Abstract";
+		}
+
+		// Process current class and all super classes
+		ClassNode currentCls = cls;
+		outerLoop: while (currentCls != null) {
+			if (currentCls.getSuperClass() != null) {
+				String superClsName = currentCls.getSuperClass().getObject();
+				if (superClsName.startsWith("android.app.")) {
+					// e.g. Activity or Fragment
+					result += superClsName.substring(12);
+					break;
+				} else if (superClsName.startsWith("android.os.")) {
+					// e.g. AsyncTask
+					result += superClsName.substring(11);
+					break;
 				}
 			}
+			for (ArgType intf : cls.getInterfaces()) {
+				String intfClsName = intf.getObject();
+				if (intfClsName.equals("java.lang.Runnable")) {
+					result += "Runnable";
+					break outerLoop;
+				} else if (intfClsName.startsWith("java.util.concurrent.")) {
+					// e.g. Callable
+					result += intfClsName.substring(21);
+					break outerLoop;
+				} else if (intfClsName.startsWith("android.view.")) {
+					// e.g. View.OnClickListener
+					result += intfClsName.substring(13);
+					break outerLoop;
+				} else if (intfClsName.startsWith("android.content.")) {
+					// e.g. DialogInterface.OnClickListener
+					result += intfClsName.substring(16);
+					break outerLoop;
+				}
+			}
+			if (currentCls.getSuperClass() == null) {
+				break;
+			}
+			currentCls = cls.root().resolveClass(currentCls.getSuperClass());
 		}
-		return null;
+		return result;
 	}
 
 	@Nullable
@@ -473,7 +464,7 @@ public class Deobfuscator {
 				return null;
 			}
 		}
-		ClassNode otherCls = cls.root().searchClassByName(cls.getPackage() + '.' + name);
+		ClassNode otherCls = cls.root().resolveClass(cls.getPackage() + '.' + name);
 		if (otherCls != null) {
 			return null;
 		}
@@ -501,24 +492,30 @@ public class Deobfuscator {
 
 	@Nullable
 	private String getMethodAlias(MethodNode mth) {
+		if (mth.contains(AFlag.DONT_RENAME)) {
+			return null;
+		}
 		MethodInfo methodInfo = mth.getMethodInfo();
 		if (methodInfo.isClassInit() || methodInfo.isConstructor()) {
 			return null;
 		}
-		String alias = mthMap.get(methodInfo);
+		String alias = getAssignedAlias(methodInfo);
 		if (alias != null) {
-			return alias;
-		}
-		alias = deobfPresets.getForMth(methodInfo);
-		if (alias != null) {
-			mthMap.put(methodInfo, alias);
-			methodInfo.setAliasFromPreset(true);
 			return alias;
 		}
 		if (shouldRename(mth.getName())) {
 			return makeMethodAlias(mth);
 		}
 		return null;
+	}
+
+	@Nullable
+	private String getAssignedAlias(MethodInfo methodInfo) {
+		String alias = mthMap.get(methodInfo);
+		if (alias != null) {
+			return alias;
+		}
+		return deobfPresets.getForMth(methodInfo);
 	}
 
 	public String makeFieldAlias(FieldNode field) {
@@ -528,9 +525,13 @@ public class Deobfuscator {
 	}
 
 	public String makeMethodAlias(MethodNode mth) {
-		String alias = String.format("m%d%s", mthIndex++, prepareNamePart(mth.getName()));
-		mthMap.put(mth.getMethodInfo(), alias);
-		return alias;
+		String prefix;
+		if (mth.contains(AType.METHOD_OVERRIDE)) {
+			prefix = "mo";
+		} else {
+			prefix = "m";
+		}
+		return String.format("%s%d%s", prefix, mthIndex++, prepareNamePart(mth.getName()));
 	}
 
 	private void processPackageFull(PackageNode pkg, String fullName) {
@@ -571,6 +572,24 @@ public class Deobfuscator {
 		return NameMapper.removeInvalidCharsMiddle(name);
 	}
 
+	private String prepareNameFull(String name, String prefix) {
+		if (name.length() > maxLength) {
+			return makeHashName(name, prefix);
+		}
+		String result = NameMapper.removeInvalidChars(name, prefix);
+		if (result.isEmpty()) {
+			return makeHashName(name, prefix);
+		}
+		if (NameMapper.isReserved(result)) {
+			return prefix + result;
+		}
+		return result;
+	}
+
+	private static String makeHashName(String name, String invalidPrefix) {
+		return invalidPrefix + 'x' + Integer.toHexString(name.hashCode());
+	}
+
 	private void dumpClassAlias(ClassNode cls) {
 		PackageNode pkg = getPackageNode(cls.getPackage(), false);
 
@@ -584,10 +603,8 @@ public class Deobfuscator {
 	}
 
 	private void dumpAlias() {
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				dumpClassAlias(cls);
-			}
+		for (ClassNode cls : root.getClasses()) {
+			dumpClassAlias(cls);
 		}
 	}
 

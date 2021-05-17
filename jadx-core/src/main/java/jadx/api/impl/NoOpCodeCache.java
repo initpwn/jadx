@@ -13,7 +13,17 @@ public class NoOpCodeCache implements ICodeCache {
 	}
 
 	@Override
+	public void remove(String clsFullName) {
+		// do nothing
+	}
+
+	@Override
 	public @Nullable ICodeInfo get(String clsFullName) {
 		return null;
+	}
+
+	@Override
+	public String toString() {
+		return "NoOpCodeCache";
 	}
 }

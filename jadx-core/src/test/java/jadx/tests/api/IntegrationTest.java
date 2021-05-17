@@ -20,16 +20,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.jar.JarOutputStream;
 
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
 import jadx.api.ICodeInfo;
+import jadx.api.ICodeWriter;
 import jadx.api.JadxArgs;
 import jadx.api.JadxDecompiler;
 import jadx.api.JadxInternalAccess;
-import jadx.core.ProcessClass;
-import jadx.core.codegen.CodeGen;
-import jadx.core.codegen.CodeWriter;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.AttrList;
@@ -39,6 +39,7 @@ import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.nodes.RootNode;
 import jadx.core.utils.DebugChecks;
 import jadx.core.utils.Utils;
+import jadx.core.utils.exceptions.JadxRuntimeException;
 import jadx.core.utils.files.FileUtils;
 import jadx.core.xmlgen.ResourceStorage;
 import jadx.core.xmlgen.entry.ResourceEntry;
@@ -103,6 +104,8 @@ public abstract class IntegrationTest extends TestUtils {
 		DebugChecks.checksEnabled = true;
 	}
 
+	protected JadxDecompiler jadxDecompiler;
+
 	@BeforeEach
 	public void init() {
 		this.deleteTmpFiles = true;
@@ -123,6 +126,9 @@ public abstract class IntegrationTest extends TestUtils {
 	@AfterEach
 	public void after() {
 		FileUtils.clearTempRootDir();
+		if (jadxDecompiler != null) {
+			jadxDecompiler.close();
+		}
 	}
 
 	public String getTestName() {
@@ -136,7 +142,7 @@ public abstract class IntegrationTest extends TestUtils {
 	public ClassNode getClassNode(Class<?> clazz) {
 		try {
 			File jar = getJarForClass(clazz);
-			return getClassNodeFromFile(jar, clazz.getName());
+			return getClassNodeFromFiles(Collections.singletonList(jar), clazz.getName());
 		} catch (Exception e) {
 			e.printStackTrace();
 			fail(e.getMessage());
@@ -144,36 +150,42 @@ public abstract class IntegrationTest extends TestUtils {
 		return null;
 	}
 
-	public ClassNode getClassNodeFromFile(File file, String clsName) {
-		JadxDecompiler d = loadFiles(Collections.singletonList(file));
-		RootNode root = JadxInternalAccess.getRoot(d);
+	public ClassNode getClassNodeFromFiles(List<File> files, String clsName) {
+		jadxDecompiler = loadFiles(files);
+		RootNode root = JadxInternalAccess.getRoot(jadxDecompiler);
 
-		ClassNode cls = root.searchClassByName(clsName);
+		ClassNode cls = root.resolveClass(clsName);
 		assertThat("Class not found: " + clsName, cls, notNullValue());
 		assertThat(clsName, is(cls.getClassInfo().getFullName()));
 
-		decompileAndCheck(d, Collections.singletonList(cls));
+		decompileAndCheck(cls);
 		return cls;
 	}
 
-	public ClassNode searchCls(List<ClassNode> list, String fullClsName) {
+	@Nullable
+	public ClassNode searchCls(List<ClassNode> list, String clsName) {
 		for (ClassNode cls : list) {
-			if (cls.getClassInfo().getFullName().equals(fullClsName)) {
+			if (cls.getClassInfo().getFullName().equals(clsName)) {
 				return cls;
 			}
 		}
-		fail("Class not found by name " + fullClsName + " in list: " + list);
+		for (ClassNode cls : list) {
+			if (cls.getClassInfo().getShortName().equals(clsName)) {
+				return cls;
+			}
+		}
+		fail("Class not found by name " + clsName + " in list: " + list);
 		return null;
 	}
 
 	protected JadxDecompiler loadFiles(List<File> inputFiles) {
-		JadxDecompiler d;
+		args.setInputFiles(inputFiles);
+		JadxDecompiler d = new JadxDecompiler(args);
 		try {
-			args.setInputFiles(inputFiles);
-			d = new JadxDecompiler(args);
 			d.load();
 		} catch (Exception e) {
 			e.printStackTrace();
+			d.close();
 			fail(e.getMessage());
 			return null;
 		}
@@ -182,12 +194,15 @@ public abstract class IntegrationTest extends TestUtils {
 		return d;
 	}
 
-	protected void decompileAndCheck(JadxDecompiler d, List<ClassNode> clsList) {
-		if (unloadCls) {
-			clsList.forEach(ClassNode::decompile);
-		} else {
-			clsList.forEach(cls -> decompileWithoutUnload(d, cls));
+	protected void decompileAndCheck(ClassNode cls) {
+		decompileAndCheck(Collections.singletonList(cls));
+	}
+
+	protected void decompileAndCheck(List<ClassNode> clsList) {
+		if (!unloadCls) {
+			clsList.forEach(cls -> cls.add(AFlag.DONT_UNLOAD_CLASS));
 		}
+		clsList.forEach(ClassNode::decompile);
 
 		for (ClassNode cls : clsList) {
 			System.out.println("-----------------------------------------------------------");
@@ -203,6 +218,14 @@ public abstract class IntegrationTest extends TestUtils {
 			clsList.forEach(this::printSmali);
 		}
 
+		runChecks(clsList);
+	}
+
+	public void runChecks(ClassNode cls) {
+		runChecks(Collections.singletonList(cls));
+	}
+
+	protected void runChecks(List<ClassNode> clsList) {
 		clsList.forEach(this::checkCode);
 		compile(clsList);
 		clsList.forEach(this::runAutoCheck);
@@ -217,7 +240,7 @@ public abstract class IntegrationTest extends TestUtils {
 	private void printCodeWithLineNumbers(ICodeInfo code) {
 		String codeStr = code.getCodeStr();
 		Map<Integer, Integer> lineMapping = code.getLineMapping();
-		String[] lines = codeStr.split(CodeWriter.NL);
+		String[] lines = codeStr.split(ICodeWriter.NL);
 		for (int i = 0; i < lines.length; i++) {
 			String line = lines[i];
 			int curLine = i + 1;
@@ -239,25 +262,9 @@ public abstract class IntegrationTest extends TestUtils {
 			Integer id = entry.getKey();
 			String name = entry.getValue();
 			String[] parts = name.split("\\.");
-			resStorage.add(new ResourceEntry(id, "", parts[0], parts[1]));
+			resStorage.add(new ResourceEntry(id, "", parts[0], parts[1], ""));
 		}
 		root.processResources(resStorage);
-	}
-
-	protected void decompileWithoutUnload(JadxDecompiler jadx, ClassNode cls) {
-		ProcessClass.process(cls);
-		generateClsCode(cls);
-		// don't unload class
-	}
-
-	protected void generateClsCode(ClassNode cls) {
-		try {
-			ICodeInfo code = CodeGen.generate(cls);
-			cls.root().getCodeCache().add(cls.getTopParentClass().getRawName(), code);
-		} catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
-		}
 	}
 
 	protected void checkCode(ClassNode cls) {
@@ -316,17 +323,18 @@ public abstract class IntegrationTest extends TestUtils {
 			}
 			try {
 				limitExecTime(() -> checkMth.invoke(origCls.getConstructor().newInstance()));
-			} catch (Exception e) {
-				rethrow("Original check failed", e);
+				System.out.println("Source check: PASSED");
+			} catch (Throwable e) {
+				throw new JadxRuntimeException("Source check failed", e);
 			}
 			// run 'check' method from decompiled class
 			if (compile) {
 				try {
 					limitExecTime(() -> invoke(cls, "check"));
-				} catch (Exception e) {
-					rethrow("Decompiled check failed", e);
+					System.out.println("Decompiled check: PASSED");
+				} catch (Throwable e) {
+					throw new JadxRuntimeException("Decompiled check failed", e);
 				}
-				System.out.println("Auto check: PASSED");
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -342,7 +350,7 @@ public abstract class IntegrationTest extends TestUtils {
 		} catch (TimeoutException ex) {
 			future.cancel(true);
 			rethrow("Execution timeout", ex);
-		} catch (Exception ex) {
+		} catch (Throwable ex) {
 			rethrow(ex.getMessage(), ex);
 		} finally {
 			executor.shutdownNow();
@@ -350,18 +358,15 @@ public abstract class IntegrationTest extends TestUtils {
 		return null;
 	}
 
-	private void rethrow(String msg, Throwable e) {
+	public static void rethrow(String msg, Throwable e) {
 		if (e instanceof InvocationTargetException) {
-			Throwable cause = e.getCause();
-			if (cause instanceof AssertionError) {
-				throw (AssertionError) cause;
-			} else {
-				fail(cause);
-			}
+			rethrow(msg, e.getCause());
 		} else if (e instanceof ExecutionException) {
 			rethrow(e.getMessage(), e.getCause());
+		} else if (e instanceof AssertionError) {
+			throw (AssertionError) e;
 		} else {
-			fail(msg, e);
+			throw new RuntimeException(msg, e);
 		}
 	}
 
@@ -458,6 +463,13 @@ public abstract class IntegrationTest extends TestUtils {
 		return files;
 	}
 
+	@NotNull
+	protected static String removeLineComments(ClassNode cls) {
+		String code = cls.getCode().getCodeStr().replaceAll("\\W*//.*", "");
+		System.out.println(code);
+		return code;
+	}
+
 	public JadxArgs getArgs() {
 		return args;
 	}
@@ -479,6 +491,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	protected void setFallback() {
+		disableCompilation();
 		this.args.setFallbackMode(true);
 	}
 

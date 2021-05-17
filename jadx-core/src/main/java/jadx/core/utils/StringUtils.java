@@ -1,9 +1,17 @@
 package jadx.core.utils;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+import org.jetbrains.annotations.Nullable;
+
 import jadx.api.JadxArgs;
+import jadx.core.deobf.NameMapper;
 
 public class StringUtils {
 	private static final StringUtils DEFAULT_INSTANCE = new StringUtils(new JadxArgs());
+	private static final String WHITES = " \t\r\n\f\b";
+	private static final String WORD_SEPARATORS = WHITES + "(\")<,>{}=+-*/|[]\\:;'.`~!#^&";
 
 	public static StringUtils getInstance() {
 		return DEFAULT_INSTANCE;
@@ -24,57 +32,74 @@ public class StringUtils {
 		res.append('"');
 		for (int i = 0; i < len; i++) {
 			int c = str.charAt(i) & 0xFFFF;
-			processChar(c, res);
+			processCharInsideString(c, res);
 		}
 		res.append('"');
 		return res.toString();
 	}
 
-	public String unescapeChar(char ch) {
-		if (ch == '\'') {
-			return "'\\\''";
+	private void processCharInsideString(int c, StringBuilder res) {
+		String str = getSpecialStringForChar(c);
+		if (str != null) {
+			res.append(str);
+			return;
 		}
-		StringBuilder res = new StringBuilder();
-		res.append('\'');
-		processChar(ch, res);
-		res.append('\'');
-		return res.toString();
+		if (c < 32 || c >= 127 && escapeUnicode) {
+			res.append("\\u").append(String.format("%04x", c));
+		} else {
+			res.append((char) c);
+		}
 	}
 
-	private void processChar(int c, StringBuilder res) {
+	/**
+	 * Represent single char best way possible
+	 */
+	public String unescapeChar(int c, boolean explicitCast) {
+		if (c == '\'') {
+			return "'\\''";
+		}
+		String str = getSpecialStringForChar(c);
+		if (str != null) {
+			return '\'' + str + '\'';
+		}
+		if (c >= 127 && escapeUnicode) {
+			return String.format("'\\u%04x'", c);
+		}
+		if (NameMapper.isPrintableChar(c)) {
+			return "'" + (char) c + '\'';
+		}
+		if (explicitCast) {
+			return "(char) " + c;
+		}
+		return String.valueOf(c);
+	}
+
+	public String unescapeChar(char ch) {
+		return unescapeChar(ch, false);
+	}
+
+	@Nullable
+	private String getSpecialStringForChar(int c) {
 		switch (c) {
 			case '\n':
-				res.append("\\n");
-				break;
+				return "\\n";
 			case '\r':
-				res.append("\\r");
-				break;
+				return "\\r";
 			case '\t':
-				res.append("\\t");
-				break;
+				return "\\t";
 			case '\b':
-				res.append("\\b");
-				break;
+				return "\\b";
 			case '\f':
-				res.append("\\f");
-				break;
+				return "\\f";
 			case '\'':
-				res.append('\'');
-				break;
+				return "'";
 			case '"':
-				res.append("\\\"");
-				break;
+				return "\\\"";
 			case '\\':
-				res.append("\\\\");
-				break;
+				return "\\\\";
 
 			default:
-				if (c < 32 || c >= 127 && escapeUnicode) {
-					res.append("\\u").append(String.format("%04x", c));
-				} else {
-					res.append((char) c);
-				}
-				break;
+				return null;
 		}
 	}
 
@@ -197,9 +222,9 @@ public class StringUtils {
 	}
 
 	private static void commonEscapeAndAppend(StringBuilder sb, char c) {
-		String replace = escapeXmlChar(c);
+		String replace = escapeWhiteSpaceChar(c);
 		if (replace == null) {
-			replace = escapeWhiteSpaceChar(c);
+			replace = escapeXmlChar(c);
 		}
 		if (replace != null) {
 			sb.append(replace);
@@ -232,5 +257,68 @@ public class StringUtils {
 			idx += subStrLen;
 		}
 		return count;
+	}
+
+	/**
+	 * returns how many lines does it have between start to pos in content.
+	 */
+	public static int countLinesByPos(String content, int pos, int start) {
+		if (start >= pos) {
+			return 0;
+		}
+		int count = 0;
+		int tempPos = start;
+		do {
+			tempPos = content.indexOf("\n", tempPos);
+			if (tempPos == -1) {
+				break;
+			}
+			if (tempPos >= pos) {
+				break;
+			}
+			count += 1;
+			tempPos += 1;
+		} while (tempPos < content.length());
+		return count;
+	}
+
+	/**
+	 * returns lines that contain pos to end if end is not -1.
+	 */
+	public static String getLine(String content, int pos, int end) {
+		if (pos >= content.length()) {
+			return "";
+		}
+		if (end != -1) {
+			if (end > content.length()) {
+				end = content.length() - 1;
+			}
+		} else {
+			end = pos + 1;
+		}
+		// get to line head
+		int headPos = content.lastIndexOf("\n", pos);
+		if (headPos == -1) {
+			headPos = 0;
+		}
+		// get to line end
+		int endPos = content.indexOf("\n", end);
+		if (endPos == -1) {
+			endPos = content.length();
+		}
+		return content.substring(headPos, endPos);
+	}
+
+	public static boolean isWhite(char chr) {
+		return WHITES.indexOf(chr) != -1;
+	}
+
+	public static boolean isWordSeparator(char chr) {
+		return WORD_SEPARATORS.indexOf(chr) != -1;
+
+	}
+
+	public static String getDateText() {
+		return new SimpleDateFormat("HH:mm:ss").format(new Date());
 	}
 }

@@ -3,6 +3,8 @@ package jadx.api;
 import java.util.Collections;
 import java.util.List;
 
+import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.MethodOverrideAttr;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.nodes.MethodNode;
@@ -48,12 +50,26 @@ public final class JavaMethod implements JavaNode {
 		}
 		List<ArgType> arguments = mth.getArgTypes();
 		return Utils.collectionMap(arguments,
-				type -> ArgType.tryToResolveClassAlias(mth.dex(), type));
+				type -> ArgType.tryToResolveClassAlias(mth.root(), type));
 	}
 
 	public ArgType getReturnType() {
 		ArgType retType = mth.getReturnType();
-		return ArgType.tryToResolveClassAlias(mth.dex(), retType);
+		return ArgType.tryToResolveClassAlias(mth.root(), retType);
+	}
+
+	@Override
+	public List<JavaNode> getUseIn() {
+		return getDeclaringClass().getRootDecompiler().convertNodes(mth.getUseIn());
+	}
+
+	public List<JavaNode> getOverrideRelatedMethods() {
+		MethodOverrideAttr ovrdAttr = mth.get(AType.METHOD_OVERRIDE);
+		if (ovrdAttr == null) {
+			return Collections.emptyList();
+		}
+		JadxDecompiler decompiler = getDeclaringClass().getRootDecompiler();
+		return decompiler.convertNodes(ovrdAttr.getRelatedMthNodes());
 	}
 
 	public boolean isConstructor() {
@@ -67,6 +83,11 @@ public final class JavaMethod implements JavaNode {
 	@Override
 	public int getDecompiledLine() {
 		return mth.getDecompiledLine();
+	}
+
+	@Override
+	public int getDefPos() {
+		return mth.getDefPosition();
 	}
 
 	/**

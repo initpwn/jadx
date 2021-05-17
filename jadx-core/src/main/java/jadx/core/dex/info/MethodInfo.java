@@ -1,17 +1,15 @@
 package jadx.core.dex.info;
 
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 import org.jetbrains.annotations.Nullable;
 
-import com.android.dex.MethodId;
-import com.android.dex.ProtoId;
-
+import jadx.api.plugins.input.data.IMethodProto;
+import jadx.api.plugins.input.data.IMethodRef;
 import jadx.core.codegen.TypeGen;
 import jadx.core.dex.instructions.args.ArgType;
-import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.RootNode;
+import jadx.core.dex.nodes.VariableNode;
 import jadx.core.utils.Utils;
 
 public final class MethodInfo implements Comparable<MethodInfo> {
@@ -21,38 +19,50 @@ public final class MethodInfo implements Comparable<MethodInfo> {
 	private final List<ArgType> argTypes;
 	private final ClassInfo declClass;
 	private final String shortId;
+	private final String rawFullId;
+	private final int hash;
+
 	private String alias;
-	private boolean aliasFromPreset;
+	private Map<String, String> varNameMap;
 
 	private MethodInfo(ClassInfo declClass, String name, List<ArgType> args, ArgType retType) {
 		this.name = name;
 		this.alias = name;
-		this.aliasFromPreset = false;
 		this.declClass = declClass;
 		this.argTypes = args;
 		this.retType = retType;
 		this.shortId = makeShortId(name, argTypes, retType);
+		this.rawFullId = declClass.makeRawFullName() + '.' + shortId;
+		this.hash = calcHashCode();
 	}
 
-	public static MethodInfo fromDex(DexNode dex, int mthIndex) {
-		MethodInfo storageMth = dex.root().getInfoStorage().getMethod(dex, mthIndex);
-		if (storageMth != null) {
-			return storageMth;
+	public static MethodInfo fromRef(RootNode root, IMethodRef methodRef) {
+		InfoStorage infoStorage = root.getInfoStorage();
+		int uniqId = methodRef.getUniqId();
+		MethodInfo prevMth = infoStorage.getByUniqId(uniqId);
+		if (prevMth != null) {
+			return prevMth;
 		}
-		MethodId mthId = dex.getMethodId(mthIndex);
-		String mthName = dex.getString(mthId.getNameIndex());
-		ClassInfo parentClass = ClassInfo.fromDex(dex, mthId.getDeclaringClassIndex());
-
-		ProtoId proto = dex.getProtoId(mthId.getProtoIndex());
-		ArgType returnType = dex.getType(proto.getReturnTypeIndex());
-		List<ArgType> args = dex.readParamList(proto.getParametersOffset());
-		MethodInfo newMth = new MethodInfo(parentClass, mthName, args, returnType);
-		return dex.root().getInfoStorage().putMethod(dex, mthIndex, newMth);
+		methodRef.load();
+		ArgType parentClsType = ArgType.parse(methodRef.getParentClassType());
+		ClassInfo parentClass = ClassInfo.fromType(root, parentClsType);
+		ArgType returnType = ArgType.parse(methodRef.getReturnType());
+		List<ArgType> args = Utils.collectionMap(methodRef.getArgTypes(), ArgType::parse);
+		MethodInfo newMth = new MethodInfo(parentClass, methodRef.getName(), args, returnType);
+		MethodInfo uniqMth = infoStorage.putMethod(newMth);
+		infoStorage.putByUniqId(uniqId, uniqMth);
+		return uniqMth;
 	}
 
-	public static MethodInfo fromDetails(RootNode rootNode, ClassInfo declClass, String name, List<ArgType> args, ArgType retType) {
+	public static MethodInfo fromDetails(RootNode root, ClassInfo declClass, String name, List<ArgType> args, ArgType retType) {
 		MethodInfo newMth = new MethodInfo(declClass, name, args, retType);
-		return rootNode.getInfoStorage().putMethod(newMth);
+		return root.getInfoStorage().putMethod(newMth);
+	}
+
+	public static MethodInfo fromMethodProto(RootNode root, ClassInfo declClass, String name, IMethodProto proto) {
+		List<ArgType> args = Utils.collectionMap(proto.getArgTypes(), ArgType::parse);
+		ArgType returnType = ArgType.parse(proto.getReturnType());
+		return fromDetails(root, declClass, name, args, returnType);
 	}
 
 	public String makeSignature(boolean includeRetType) {
@@ -98,7 +108,7 @@ public final class MethodInfo implements Comparable<MethodInfo> {
 	}
 
 	public String getRawFullId() {
-		return declClass.makeRawFullName() + '.' + shortId;
+		return rawFullId;
 	}
 
 	/**
@@ -144,17 +154,36 @@ public final class MethodInfo implements Comparable<MethodInfo> {
 		return !name.equals(alias);
 	}
 
-	public boolean isAliasFromPreset() {
-		return aliasFromPreset;
+	public synchronized void setVarNameMap(Set<String> names) {
+		if (varNameMap == null) {
+			varNameMap = new HashMap<>();
+		}
+		for (String name : names) {
+			String[] indexesAndName = name.split(VariableNode.VAR_SEPARATOR);
+			if (indexesAndName.length == 2) {
+				varNameMap.put(indexesAndName[0], indexesAndName[1]);
+			}
+		}
 	}
 
-	public void setAliasFromPreset(boolean value) {
-		aliasFromPreset = value;
+	public String getVariableName(String indexes) {
+		if (varNameMap != null) {
+			return varNameMap.get(indexes);
+		}
+		return null;
+	}
+
+	public boolean hasVarNameMap() {
+		return varNameMap != null && varNameMap.size() > 0;
+	}
+
+	public int calcHashCode() {
+		return shortId.hashCode() + 31 * declClass.hashCode();
 	}
 
 	@Override
 	public int hashCode() {
-		return shortId.hashCode() + 31 * declClass.hashCode();
+		return hash;
 	}
 
 	@Override

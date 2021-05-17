@@ -1,6 +1,12 @@
 package jadx.gui.ui.codearea;
 
-import javax.swing.*;
+import java.awt.Point;
+import java.awt.event.InputEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+
+import javax.swing.JPopupMenu;
+import javax.swing.event.PopupMenuEvent;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.Token;
@@ -12,12 +18,17 @@ import org.slf4j.LoggerFactory;
 import jadx.api.CodePosition;
 import jadx.api.JadxDecompiler;
 import jadx.api.JavaNode;
+import jadx.gui.jobs.IndexJob;
+import jadx.gui.settings.JadxProject;
 import jadx.gui.treemodel.JClass;
 import jadx.gui.treemodel.JNode;
 import jadx.gui.ui.ContentPanel;
 import jadx.gui.ui.MainWindow;
+import jadx.gui.utils.CaretPositionFix;
+import jadx.gui.utils.DefaultPopupMenuListener;
 import jadx.gui.utils.JNodeCache;
 import jadx.gui.utils.JumpPosition;
+import jadx.gui.utils.UiUtils;
 
 /**
  * The {@link AbstractCodeArea} implementation used for displaying Java code and text based
@@ -32,15 +43,37 @@ public final class CodeArea extends AbstractCodeArea {
 		super(contentPanel);
 		setSyntaxEditingStyle(node.getSyntaxName());
 
-		if (node instanceof JClass) {
+		boolean isJavaCode = node instanceof JClass;
+		if (isJavaCode) {
 			((RSyntaxDocument) getDocument()).setSyntaxStyle(new JadxTokenMaker(this));
 			addMenuItems();
 		}
 
 		setHyperlinksEnabled(true);
-		CodeLinkGenerator codeLinkProcessor = new CodeLinkGenerator(this);
-		setLinkGenerator(codeLinkProcessor);
-		addHyperlinkListener(codeLinkProcessor);
+		setLinkScanningMask(InputEvent.CTRL_DOWN_MASK);
+		CodeLinkGenerator codeLinkGenerator = new CodeLinkGenerator(this);
+		setLinkGenerator(codeLinkGenerator);
+		addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				if (e.getClickCount() % 2 == 0 || e.isControlDown()) {
+					navToDecl(e.getPoint(), codeLinkGenerator);
+				}
+			}
+		});
+
+		if (isJavaCode) {
+			addMouseMotionListener(new MouseHoverHighlighter(this, codeLinkGenerator));
+		}
+	}
+
+	@SuppressWarnings("deprecation")
+	private void navToDecl(Point point, CodeLinkGenerator codeLinkGenerator) {
+		int offs = viewToModel(point);
+		JumpPosition jump = codeLinkGenerator.getJumpLinkAtOffset(CodeArea.this, offs);
+		if (jump != null) {
+			contentPanel.getTabbedPane().codeJump(jump);
+		}
 	}
 
 	@Override
@@ -51,19 +84,42 @@ public final class CodeArea extends AbstractCodeArea {
 		}
 	}
 
+	@Override
+	public void refresh() {
+		setText(node.getContent());
+	}
+
 	private void addMenuItems() {
 		FindUsageAction findUsage = new FindUsageAction(this);
 		GoToDeclarationAction goToDeclaration = new GoToDeclarationAction(this);
 		RenameAction rename = new RenameAction(this);
+		CommentAction comment = new CommentAction(this);
 
 		JPopupMenu popup = getPopupMenu();
 		popup.addSeparator();
 		popup.add(findUsage);
 		popup.add(goToDeclaration);
+		popup.add(comment);
+		popup.add(new CommentSearchAction(this));
 		popup.add(rename);
 		popup.addPopupMenuListener(findUsage);
 		popup.addPopupMenuListener(goToDeclaration);
+		popup.addPopupMenuListener(comment);
 		popup.addPopupMenuListener(rename);
+
+		// move caret on mouse right button click
+		popup.addPopupMenuListener(new DefaultPopupMenuListener() {
+			@Override
+			public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+				CodeArea codeArea = CodeArea.this;
+				if (codeArea.getSelectedText() == null) {
+					int offset = UiUtils.getOffsetAtMousePosition(codeArea);
+					if (offset >= 0) {
+						codeArea.setCaretPosition(offset);
+					}
+				}
+			}
+		});
 	}
 
 	public int adjustOffsetForToken(@Nullable Token token) {
@@ -115,12 +171,20 @@ public final class CodeArea extends AbstractCodeArea {
 			return null;
 		}
 		JNode jNode = convertJavaNode(foundNode);
-		return new JumpPosition(jNode.getRootClass(), pos.getLine());
+		return new JumpPosition(jNode.getRootClass(), pos.getLine(), JumpPosition.getDefPos(jNode));
 	}
 
 	private JNode convertJavaNode(JavaNode javaNode) {
 		JNodeCache nodeCache = getMainWindow().getCacheObject().getNodeCache();
 		return nodeCache.makeFrom(javaNode);
+	}
+
+	public JNode getNodeUnderCaret() {
+		int start = getWordStart(getCaretPosition());
+		if (start == -1) {
+			start = getCaretPosition();
+		}
+		return getJNodeAtOffset(start);
 	}
 
 	@Nullable
@@ -150,11 +214,34 @@ public final class CodeArea extends AbstractCodeArea {
 		return null;
 	}
 
+	public void refreshClass() {
+		if (node instanceof JClass) {
+			JClass cls = (JClass) node;
+			try {
+				CaretPositionFix caretFix = new CaretPositionFix(this);
+				caretFix.save();
+
+				cls.reload();
+				IndexJob.refreshIndex(getMainWindow().getCacheObject(), cls.getCls());
+
+				ClassCodeContentPanel codeContentPanel = (ClassCodeContentPanel) this.contentPanel;
+				codeContentPanel.getTabbedPane().refresh(cls);
+				codeContentPanel.getJavaCodePanel().refresh(caretFix);
+			} catch (Exception e) {
+				LOG.error("Failed to reload class: {}", cls.getFullName(), e);
+			}
+		}
+	}
+
 	public MainWindow getMainWindow() {
 		return contentPanel.getTabbedPane().getMainWindow();
 	}
 
-	private JadxDecompiler getDecompiler() {
+	public JadxDecompiler getDecompiler() {
 		return getMainWindow().getWrapper().getDecompiler();
+	}
+
+	public JadxProject getProject() {
+		return getMainWindow().getProject();
 	}
 }

@@ -7,11 +7,18 @@ import jadx.core.dex.nodes.ClassNode;
 
 public class JadxAssertions extends Assertions {
 
-	public static JadxClassNodeAssertions assertThat(ClassNode actual) {
-		return new JadxClassNodeAssertions(actual);
+	public static JadxClassNodeAssertions assertThat(ClassNode cls) {
+		Assertions.assertThat(cls).isNotNull();
+		return new JadxClassNodeAssertions(cls);
 	}
 
-	public static JadxCodeAssertions assertThat(ICodeInfo actual) {
-		return new JadxCodeAssertions(actual.getCodeStr());
+	public static JadxCodeInfoAssertions assertThat(ICodeInfo codeInfo) {
+		Assertions.assertThat(codeInfo).isNotNull();
+		return new JadxCodeInfoAssertions(codeInfo);
+	}
+
+	public static JadxCodeAssertions assertThat(String code) {
+		Assertions.assertThat(code).isNotNull();
+		return new JadxCodeAssertions(code);
 	}
 }

@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -22,13 +23,14 @@ import jadx.core.dex.attributes.nodes.LoopInfo;
 import jadx.core.dex.attributes.nodes.LoopLabelAttr;
 import jadx.core.dex.instructions.IfNode;
 import jadx.core.dex.instructions.InsnType;
-import jadx.core.dex.instructions.SwitchNode;
+import jadx.core.dex.instructions.SwitchInsn;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.Edge;
 import jadx.core.dex.nodes.IBlock;
 import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
+import jadx.core.dex.nodes.InsnContainer;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.regions.Region;
@@ -60,8 +62,8 @@ public class RegionMaker {
 
 	private final MethodNode mth;
 	private final int regionsLimit;
+	private final BitSet processedBlocks;
 	private int regionsCount;
-	private BitSet processedBlocks;
 
 	public RegionMaker(MethodNode mth) {
 		this.mth = mth;
@@ -73,6 +75,10 @@ public class RegionMaker {
 	public Region makeRegion(BlockNode startBlock, RegionStack stack) {
 		Region r = new Region(stack.peekRegion());
 		if (startBlock == null) {
+			return r;
+		}
+		if (stack.containsExit(startBlock)) {
+			insertEdgeInsns(r, startBlock);
 			return r;
 		}
 
@@ -92,6 +98,27 @@ public class RegionMaker {
 			}
 		}
 		return r;
+	}
+
+	private void insertEdgeInsns(Region region, BlockNode exitBlock) {
+		List<EdgeInsnAttr> edgeInsns = exitBlock.getAll(AType.EDGE_INSN);
+		if (edgeInsns.isEmpty()) {
+			return;
+		}
+		List<InsnNode> insns = new ArrayList<>(edgeInsns.size());
+		addOneInsnOfType(insns, edgeInsns, InsnType.BREAK);
+		addOneInsnOfType(insns, edgeInsns, InsnType.CONTINUE);
+		region.add(new InsnContainer(insns));
+	}
+
+	private void addOneInsnOfType(List<InsnNode> insns, List<EdgeInsnAttr> edgeInsns, InsnType insnType) {
+		for (EdgeInsnAttr edgeInsn : edgeInsns) {
+			InsnNode insn = edgeInsn.getInsn();
+			if (insn.getType() == insnType) {
+				insns.add(insn);
+				return;
+			}
+		}
 	}
 
 	/**
@@ -127,7 +154,7 @@ public class RegionMaker {
 					break;
 
 				case SWITCH:
-					next = processSwitch(r, block, (SwitchNode) insn, stack);
+					next = processSwitch(r, block, (SwitchInsn) insn, stack);
 					processed = true;
 					break;
 
@@ -224,7 +251,13 @@ public class RegionMaker {
 			}
 			stack.addExit(out);
 			BlockNode loopBody = condInfo.getThenBlock();
-			Region body = makeRegion(loopBody, stack);
+			Region body;
+			if (Objects.equals(loopBody, loopStart)) {
+				// empty loop body
+				body = new Region(loopRegion);
+			} else {
+				body = makeRegion(loopBody, stack);
+			}
 			// add blocks from loop start to first condition block
 			BlockNode conditionBlock = condInfo.getIfBlock();
 			if (loopStart != conditionBlock) {
@@ -594,6 +627,8 @@ public class RegionMaker {
 				List<BlockNode> list = BlockUtils.buildSimplePath(exitBlock);
 				if (list.isEmpty() || !list.get(list.size() - 1).getSuccessors().isEmpty()) {
 					stack.addExit(exitBlock);
+					// we can still try using this as an exit block to make sure it's visited.
+					exit = exitBlock;
 				}
 			}
 		}
@@ -738,15 +773,14 @@ public class RegionMaker {
 		region.add(start);
 	}
 
-	private BlockNode processSwitch(IRegion currentRegion, BlockNode block, SwitchNode insn, RegionStack stack) {
+	private BlockNode processSwitch(IRegion currentRegion, BlockNode block, SwitchInsn insn, RegionStack stack) {
 		// map case blocks to keys
 		int len = insn.getTargets().length;
 		Map<BlockNode, List<Object>> blocksMap = new LinkedHashMap<>(len);
-		Object[] keysArr = insn.getKeys();
 		BlockNode[] targetBlocksArr = insn.getTargetBlocks();
 		for (int i = 0; i < len; i++) {
 			List<Object> keys = blocksMap.computeIfAbsent(targetBlocksArr[i], k -> new ArrayList<>(2));
-			keys.add(keysArr[i]);
+			keys.add(insn.getKey(i));
 		}
 		BlockNode defCase = insn.getDefTargetBlock();
 		if (defCase != null) {
@@ -899,7 +933,7 @@ public class RegionMaker {
 	 * 1. single 'default' case
 	 * 2. filler cases if switch is 'packed' and 'default' case is empty
 	 */
-	private void removeEmptyCases(SwitchNode insn, SwitchRegion sw, BlockNode defCase) {
+	private void removeEmptyCases(SwitchInsn insn, SwitchRegion sw, BlockNode defCase) {
 		boolean defaultCaseIsEmpty;
 		if (defCase == null) {
 			defaultCaseIsEmpty = true;

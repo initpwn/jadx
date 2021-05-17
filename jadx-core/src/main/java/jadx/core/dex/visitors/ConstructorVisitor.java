@@ -24,7 +24,7 @@ import jadx.core.utils.InsnRemover;
 @JadxVisitor(
 		name = "ConstructorVisitor",
 		desc = "Replace invoke with constructor call",
-		runAfter = SSATransform.class,
+		runAfter = { SSATransform.class, MoveInlineVisitor.class },
 		runBefore = TypeInferenceVisitor.class
 )
 public class ConstructorVisitor extends AbstractVisitor {
@@ -60,8 +60,16 @@ public class ConstructorVisitor extends AbstractVisitor {
 		if (!callMth.isConstructor()) {
 			return;
 		}
-		InsnNode instArgAssignInsn = ((RegisterArg) inv.getArg(0)).getAssignInsn();
+		RegisterArg instanceArg = ((RegisterArg) inv.getArg(0));
+		InsnNode instArgAssignInsn = instanceArg.getAssignInsn();
 		ConstructorInsn co = new ConstructorInsn(mth, inv);
+		if (co.isNewInstance()) {
+			co.setResult(instanceArg);
+			// convert from 'use' to 'assign'
+			instanceArg.getSVar().setAssign(instanceArg);
+		}
+		instanceArg.getSVar().removeUse(instanceArg);
+
 		co.rebindArgs();
 		boolean remove = false;
 		if (co.isSuper() && (co.getArgsCount() == 0 || parentClass.isEnum())) {
@@ -114,13 +122,13 @@ public class ConstructorVisitor extends AbstractVisitor {
 	 */
 	@Nullable
 	private static ConstructorInsn processConstructor(MethodNode mth, ConstructorInsn co) {
-		MethodNode callMth = mth.dex().resolveMethod(co.getCallMth());
+		MethodNode callMth = mth.root().resolveMethod(co.getCallMth());
 		if (callMth == null
 				|| !callMth.getAccessFlags().isSynthetic()
 				|| !allArgsNull(co)) {
 			return null;
 		}
-		ClassNode classNode = mth.dex().resolveClass(callMth.getParentClass().getClassInfo());
+		ClassNode classNode = mth.root().resolveClass(callMth.getParentClass().getClassInfo());
 		if (classNode == null) {
 			return null;
 		}

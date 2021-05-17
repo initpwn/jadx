@@ -1,6 +1,6 @@
 package jadx.gui.treemodel;
 
-import javax.swing.*;
+import javax.swing.Icon;
 
 import jadx.api.JavaNode;
 import jadx.gui.utils.search.StringRef;
@@ -13,12 +13,14 @@ public class CodeNode extends JNode {
 	private final transient JClass jParent;
 	private final transient StringRef line;
 	private final transient int lineNum;
+	private transient int pos;
 
-	public CodeNode(JNode jNode, int lineNum, StringRef lineStr) {
+	public CodeNode(JNode jNode, StringRef lineStr, int lineNum, int pos) {
 		this.jNode = jNode;
 		this.jParent = this.jNode.getJParent();
 		this.line = lineStr;
 		this.lineNum = lineNum;
+		this.pos = pos;
 	}
 
 	@Override
@@ -48,6 +50,10 @@ public class CodeNode extends JNode {
 		return null;
 	}
 
+	public StringRef getLineStr() {
+		return line;
+	}
+
 	@Override
 	public int getLine() {
 		return lineNum;
@@ -71,5 +77,32 @@ public class CodeNode extends JNode {
 	@Override
 	public String makeLongString() {
 		return makeString();
+	}
+
+	@Override
+	public String getSyntaxName() {
+		return jNode.getSyntaxName();
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (!(o instanceof CodeNode)) {
+			return false;
+		}
+		CodeNode codeNode = (CodeNode) o;
+		return jNode.equals(codeNode.jNode);
+	}
+
+	@Override
+	public int hashCode() {
+		return jNode.hashCode();
+	}
+
+	@Override
+	public int getPos() {
+		return pos;
 	}
 }

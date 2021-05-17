@@ -1,12 +1,12 @@
 package jadx.cli;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import com.beust.jcommander.IStringConverter;
 import com.beust.jcommander.Parameter;
@@ -19,7 +19,7 @@ import jadx.core.utils.files.FileUtils;
 
 public class JadxCLIArgs {
 
-	@Parameter(description = "<input file> (.apk, .dex, .jar, .class, .smali, .zip, .aar, .arsc)")
+	@Parameter(description = "<input files> (.apk, .dex, .jar, .class, .smali, .zip, .aar, .arsc, .aab)")
 	protected List<String> files = new ArrayList<>(1);
 
 	@Parameter(names = { "-d", "--output-dir" }, description = "output directory")
@@ -58,6 +58,9 @@ public class JadxCLIArgs {
 	@Parameter(names = { "--no-debug-info" }, description = "disable debug info")
 	protected boolean debugInfo = true;
 
+	@Parameter(names = { "--add-debug-lines" }, description = "add comments with debug line numbers if available")
+	protected boolean addDebugLines = false;
+
 	@Parameter(names = { "--no-inline-anonymous" }, description = "disable anonymous classes inline")
 	protected boolean inlineAnonymousClasses = true;
 
@@ -78,6 +81,12 @@ public class JadxCLIArgs {
 
 	@Parameter(names = { "--deobf-max" }, description = "max length of name, renamed if longer")
 	protected int deobfuscationMaxLength = 64;
+
+	@Parameter(
+			names = { "--deobf-cfg-file" },
+			description = "deobfuscation map file, default: same dir and name as input file with '.jobf' extension"
+	)
+	protected String deobfuscationMapFile;
 
 	@Parameter(names = { "--deobf-rewrite-cfg" }, description = "force to save deobfuscation map")
 	protected boolean deobfuscationForceSave = false;
@@ -193,6 +202,7 @@ public class JadxCLIArgs {
 		args.setRawCFGOutput(rawCfgOutput);
 		args.setReplaceConsts(replaceConsts);
 		args.setDeobfuscationOn(deobfuscationOn);
+		args.setDeobfuscationMapFile(FileUtils.toFile(deobfuscationMapFile));
 		args.setDeobfuscationForceSave(deobfuscationForceSave);
 		args.setDeobfuscationMinLength(deobfuscationMinLength);
 		args.setDeobfuscationMaxLength(deobfuscationMaxLength);
@@ -203,6 +213,7 @@ public class JadxCLIArgs {
 		args.setExportAsGradleProject(exportAsGradleProject);
 		args.setUseImports(useImports);
 		args.setDebugInfo(debugInfo);
+		args.setInsertDebugLines(addDebugLines);
 		args.setInlineAnonymousClasses(inlineAnonymousClasses);
 		args.setRenameCaseSensitive(isRenameCaseSensitive());
 		args.setRenameValid(isRenameValid());
@@ -255,6 +266,10 @@ public class JadxCLIArgs {
 		return debugInfo;
 	}
 
+	public boolean isAddDebugLines() {
+		return addDebugLines;
+	}
+
 	public boolean isInlineAnonymousClasses() {
 		return inlineAnonymousClasses;
 	}
@@ -269,6 +284,10 @@ public class JadxCLIArgs {
 
 	public int getDeobfuscationMaxLength() {
 		return deobfuscationMaxLength;
+	}
+
+	public String getDeobfuscationMapFile() {
+		return deobfuscationMapFile;
 	}
 
 	public boolean isDeobfuscationForceSave() {
@@ -353,7 +372,7 @@ public class JadxCLIArgs {
 	}
 
 	public static String enumValuesString(Enum<?>[] values) {
-		return Arrays.stream(values)
+		return Stream.of(values)
 				.map(v -> '\'' + v.name().toLowerCase(Locale.ROOT) + '\'')
 				.collect(Collectors.joining(", "));
 	}

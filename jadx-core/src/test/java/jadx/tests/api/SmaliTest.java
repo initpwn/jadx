@@ -1,16 +1,13 @@
 package jadx.tests.api;
 
 import java.io.File;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.jetbrains.annotations.Nullable;
-import org.jf.smali.Smali;
-import org.jf.smali.SmaliOptions;
 
-import jadx.api.JadxDecompiler;
 import jadx.api.JadxInternalAccess;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.RootNode;
@@ -26,9 +23,7 @@ public abstract class SmaliTest extends IntegrationTest {
 
 	protected ClassNode getClassNodeFromSmali(String file, String clsName) {
 		File smaliFile = getSmaliFile(file);
-		File outDex = createTempFile(".dex");
-		compileSmali(outDex, Collections.singletonList(smaliFile));
-		return getClassNodeFromFile(outDex, clsName);
+		return getClassNodeFromFiles(Collections.singletonList(smaliFile), clsName);
 	}
 
 	/**
@@ -42,11 +37,6 @@ public abstract class SmaliTest extends IntegrationTest {
 		return getClassNodeFromSmali(getTestPkg() + File.separatorChar + getTestName(), fullClsName);
 	}
 
-	@Deprecated
-	protected ClassNode getClassNodeFromSmali(String clsName) {
-		return getClassNodeFromSmali(clsName, clsName);
-	}
-
 	protected ClassNode getClassNodeFromSmaliWithPath(String path, String clsName) {
 		return getClassNodeFromSmali(path + File.separatorChar + clsName, clsName);
 	}
@@ -56,9 +46,7 @@ public abstract class SmaliTest extends IntegrationTest {
 	}
 
 	protected ClassNode getClassNodeFromSmaliFiles(String pkg, String testName, String clsName) {
-		File outDex = createTempFile(".dex");
-		compileSmali(outDex, collectSmaliFiles(pkg, testName));
-		return getClassNodeFromFile(outDex, pkg + '.' + clsName);
+		return getClassNodeFromFiles(collectSmaliFiles(pkg, testName), pkg + '.' + clsName);
 	}
 
 	protected ClassNode getClassNodeFromSmaliFiles(String clsName) {
@@ -66,13 +54,10 @@ public abstract class SmaliTest extends IntegrationTest {
 	}
 
 	protected List<ClassNode> loadFromSmaliFiles() {
-		File outDex = createTempFile(".dex");
-		compileSmali(outDex, collectSmaliFiles(getTestPkg(), getTestName()));
-
-		JadxDecompiler d = loadFiles(Collections.singletonList(outDex));
-		RootNode root = JadxInternalAccess.getRoot(d);
+		jadxDecompiler = loadFiles(collectSmaliFiles(getTestPkg(), getTestName()));
+		RootNode root = JadxInternalAccess.getRoot(jadxDecompiler);
 		List<ClassNode> classes = root.getClasses(false);
-		decompileAndCheck(d, classes);
+		decompileAndCheck(classes);
 		return classes;
 	}
 
@@ -83,10 +68,10 @@ public abstract class SmaliTest extends IntegrationTest {
 		} else {
 			smaliFilesDir = pkg + File.separatorChar + testDir + File.separatorChar;
 		}
-		File smaliDir = new File(SMALI_TESTS_DIR, smaliFilesDir);
+		File smaliDir = getSmaliDir(smaliFilesDir);
 		String[] smaliFileNames = smaliDir.list((dir, name) -> name.endsWith(".smali"));
 		assertThat("Smali files not found in " + smaliDir, smaliFileNames, notNullValue());
-		return Arrays.stream(smaliFileNames)
+		return Stream.of(smaliFileNames)
 				.map(file -> new File(smaliDir, file))
 				.collect(Collectors.toList());
 	}
@@ -103,15 +88,15 @@ public abstract class SmaliTest extends IntegrationTest {
 		throw new AssertionError("Smali file not found: " + smaliFile.getPath());
 	}
 
-	private static boolean compileSmali(File output, List<File> inputFiles) {
-		try {
-			SmaliOptions options = new SmaliOptions();
-			options.outputDexFile = output.getAbsolutePath();
-			List<String> inputFileNames = inputFiles.stream().map(File::getAbsolutePath).collect(Collectors.toList());
-			Smali.assemble(options, inputFileNames);
-		} catch (Exception e) {
-			throw new AssertionError("Smali assemble error", e);
+	private static File getSmaliDir(String baseName) {
+		File smaliDir = new File(SMALI_TESTS_DIR, baseName);
+		if (smaliDir.exists()) {
+			return smaliDir;
 		}
-		return true;
+		File pathFromRoot = new File(SMALI_TESTS_PROJECT, smaliDir.getPath());
+		if (pathFromRoot.exists()) {
+			return pathFromRoot;
+		}
+		throw new AssertionError("Smali dir not found: " + smaliDir.getPath());
 	}
 }

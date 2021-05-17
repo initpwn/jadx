@@ -1,8 +1,8 @@
 package jadx.gui.ui.codearea;
 
-import java.awt.*;
+import java.awt.BorderLayout;
 
-import javax.swing.*;
+import javax.swing.JTabbedPane;
 import javax.swing.border.EmptyBorder;
 
 import jadx.gui.treemodel.JNode;
@@ -22,7 +22,7 @@ public final class ClassCodeContentPanel extends AbstractCodeContentPanel {
 
 	private final transient CodePanel javaCodePanel;
 	private final transient CodePanel smaliCodePanel;
-	// private final transient JTabbedPane areaTabbedPane;
+	private final transient JTabbedPane areaTabbedPane;
 
 	public ClassCodeContentPanel(TabbedPane panel, JNode jnode) {
 		super(panel, jnode);
@@ -33,7 +33,7 @@ public final class ClassCodeContentPanel extends AbstractCodeContentPanel {
 		setLayout(new BorderLayout());
 		setBorder(new EmptyBorder(0, 0, 0, 0));
 
-		JTabbedPane areaTabbedPane = new JTabbedPane(JTabbedPane.BOTTOM);
+		areaTabbedPane = new JTabbedPane(JTabbedPane.BOTTOM);
 		areaTabbedPane.setBorder(new EmptyBorder(0, 0, 0, 0));
 		areaTabbedPane.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
 		areaTabbedPane.add(javaCodePanel, NLS.str("tabs.code"));
@@ -70,4 +70,24 @@ public final class ClassCodeContentPanel extends AbstractCodeContentPanel {
 		return javaCodePanel.getCodeArea();
 	}
 
+	public CodePanel getJavaCodePanel() {
+		return javaCodePanel;
+	}
+
+	public void switchPanel() {
+		boolean toSmali = areaTabbedPane.getSelectedComponent() == javaCodePanel;
+		areaTabbedPane.setSelectedComponent(toSmali ? smaliCodePanel : javaCodePanel);
+	}
+
+	public AbstractCodeArea getCurrentCodeArea() {
+		return ((CodePanel) areaTabbedPane.getSelectedComponent()).getCodeArea();
+	}
+
+	public AbstractCodeArea getSmaliCodeArea() {
+		return smaliCodePanel.getCodeArea();
+	}
+
+	public void showSmaliPane() {
+		areaTabbedPane.setSelectedComponent(smaliCodePanel);
+	}
 }

@@ -1,7 +1,10 @@
 package jadx.core.dex.nodes;
 
-import com.android.dex.ClassData.Field;
+import java.util.Collections;
+import java.util.List;
 
+import jadx.api.plugins.input.data.IFieldData;
+import jadx.core.dex.attributes.annotations.AnnotationsList;
 import jadx.core.dex.attributes.nodes.LineAttrNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.AccessInfo.AFType;
@@ -10,22 +13,30 @@ import jadx.core.dex.instructions.args.ArgType;
 
 public class FieldNode extends LineAttrNode implements ICodeNode {
 
-	private final ClassNode parent;
+	private final ClassNode parentClass;
 	private final FieldInfo fieldInfo;
 	private AccessInfo accFlags;
 
 	private ArgType type;
 
-	public FieldNode(ClassNode cls, Field field) {
-		this(cls, FieldInfo.fromDex(cls.dex(), field.getFieldIndex()),
-				field.getAccessFlags());
+	private List<MethodNode> useIn = Collections.emptyList();
+
+	public static FieldNode build(ClassNode cls, IFieldData fieldData) {
+		FieldInfo fieldInfo = FieldInfo.fromData(cls.root(), fieldData);
+		FieldNode fieldNode = new FieldNode(cls, fieldInfo, fieldData.getAccessFlags());
+		AnnotationsList.attach(fieldNode, fieldData.getAnnotations());
+		return fieldNode;
 	}
 
 	public FieldNode(ClassNode cls, FieldInfo fieldInfo, int accessFlags) {
-		this.parent = cls;
+		this.parentClass = cls;
 		this.fieldInfo = fieldInfo;
 		this.type = fieldInfo.getType();
 		this.accFlags = new AccessInfo(accessFlags, AFType.FIELD);
+	}
+
+	public void updateType(ArgType type) {
+		this.type = type;
 	}
 
 	public FieldInfo getFieldInfo() {
@@ -42,6 +53,10 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 		this.accFlags = accFlags;
 	}
 
+	public boolean isStatic() {
+		return accFlags.isStatic();
+	}
+
 	public String getName() {
 		return fieldInfo.getName();
 	}
@@ -54,12 +69,16 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 		return type;
 	}
 
-	public void setType(ArgType type) {
-		this.type = type;
+	public ClassNode getParentClass() {
+		return parentClass;
 	}
 
-	public ClassNode getParentClass() {
-		return parent;
+	public List<MethodNode> getUseIn() {
+		return useIn;
+	}
+
+	public void setUseIn(List<MethodNode> useIn) {
+		this.useIn = useIn;
 	}
 
 	@Override
@@ -68,13 +87,13 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 	}
 
 	@Override
-	public DexNode dex() {
-		return parent.dex();
+	public String getInputFileName() {
+		return parentClass.getInputFileName();
 	}
 
 	@Override
 	public RootNode root() {
-		return parent.root();
+		return parentClass.root();
 	}
 
 	@Override

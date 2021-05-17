@@ -1,18 +1,20 @@
 package jadx.core.dex.attributes.nodes;
 
+import java.util.List;
+
 import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.IAttribute;
 import jadx.core.dex.instructions.args.ArgType;
 
 public class GenericInfoAttr implements IAttribute {
-	private final ArgType[] genericTypes;
+	private final List<ArgType> genericTypes;
 	private boolean explicit;
 
-	public GenericInfoAttr(ArgType[] genericTypes) {
+	public GenericInfoAttr(List<ArgType> genericTypes) {
 		this.genericTypes = genericTypes;
 	}
 
-	public ArgType[] getGenericTypes() {
+	public List<ArgType> getGenericTypes() {
 		return genericTypes;
 	}
 
@@ -27,5 +29,10 @@ public class GenericInfoAttr implements IAttribute {
 	@Override
 	public AType<GenericInfoAttr> getType() {
 		return AType.GENERIC_INFO;
+	}
+
+	@Override
+	public String toString() {
+		return "GenericInfoAttr{" + genericTypes + ", explicit=" + explicit + '}';
 	}
 }

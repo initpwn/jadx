@@ -5,8 +5,11 @@ import java.util.Iterator;
 import javax.swing.Icon;
 import javax.swing.ImageIcon;
 
+import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
+
 import jadx.api.JavaMethod;
 import jadx.api.JavaNode;
+import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.gui.utils.OverlayIcon;
@@ -33,6 +36,10 @@ public class JMethod extends JNode {
 
 	@Override
 	public JavaNode getJavaNode() {
+		return mth;
+	}
+
+	public JavaMethod getJavaMethod() {
 		return mth;
 	}
 
@@ -66,6 +73,16 @@ public class JMethod extends JNode {
 			icon.add(ICON_SYNC);
 		}
 		return icon;
+	}
+
+	@Override
+	public String getSyntaxName() {
+		return SyntaxConstants.SYNTAX_STYLE_JAVA;
+	}
+
+	@Override
+	public boolean canRename() {
+		return !mth.getMethodNode().contains(AFlag.DONT_RENAME);
 	}
 
 	String makeBaseString() {

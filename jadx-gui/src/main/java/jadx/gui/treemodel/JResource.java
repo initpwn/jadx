@@ -5,13 +5,15 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
-import javax.swing.*;
+import javax.swing.Icon;
+import javax.swing.ImageIcon;
 
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import jadx.api.ICodeInfo;
+import jadx.api.ICodeWriter;
 import jadx.api.ResourceFile;
 import jadx.api.ResourceFileContent;
 import jadx.api.ResourceType;
@@ -22,8 +24,6 @@ import jadx.core.xmlgen.ResContainer;
 import jadx.gui.utils.NLS;
 import jadx.gui.utils.OverlayIcon;
 import jadx.gui.utils.UiUtils;
-
-import static jadx.core.codegen.CodeWriter.NL;
 
 public class JResource extends JLoadableNode implements Comparable<JResource> {
 	private static final long serialVersionUID = -201018424302612434L;
@@ -64,8 +64,7 @@ public class JResource extends JLoadableNode implements Comparable<JResource> {
 
 	public final void update() {
 		if (files.isEmpty()) {
-			if (type == JResType.DIR
-					|| type == JResType.ROOT
+			if (type == JResType.DIR || type == JResType.ROOT
 					|| resFile.getType() == ResourceType.ARSC) {
 				// fake leaf to force show expand button
 				// real sub nodes will load on expand in loadNode() method
@@ -154,7 +153,7 @@ public class JResource extends JLoadableNode implements Comparable<JResource> {
 						return ResourcesLoader.loadToCodeWriter(is);
 					});
 				} catch (Exception e) {
-					return new SimpleCodeInfo("Failed to load resource file:" + NL + Utils.getStackTrace(e));
+					return new SimpleCodeInfo("Failed to load resource file:" + ICodeWriter.NL + Utils.getStackTrace(e));
 				}
 
 			case DECODED_DATA:
@@ -218,7 +217,7 @@ public class JResource extends JLoadableNode implements Comparable<JResource> {
 				return SyntaxConstants.SYNTAX_STYLE_XML;
 
 			default:
-				String syntax = getSyntaxByExtension(resFile.getName());
+				String syntax = getSyntaxByExtension(resFile.getDeobfName());
 				if (syntax != null) {
 					return syntax;
 				}
@@ -279,6 +278,7 @@ public class JResource extends JLoadableNode implements Comparable<JResource> {
 			case CODE:
 			case FONT:
 			case LIB:
+			case MEDIA:
 				return false;
 
 			case MANIFEST:

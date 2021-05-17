@@ -2,7 +2,7 @@ package jadx.core.dex.attributes;
 
 import java.util.List;
 
-import jadx.core.dex.attributes.annotations.Annotation;
+import jadx.api.plugins.input.data.annotations.IAnnotation;
 
 public abstract class AttrNode implements IAttributeNode {
 
@@ -31,6 +31,23 @@ public abstract class AttrNode implements IAttributeNode {
 		if (!copyFrom.isEmpty()) {
 			initStorage().addAll(copyFrom);
 		}
+	}
+
+	@Override
+	public <T extends IAttribute> void copyAttributeFrom(AttrNode attrNode, AType<T> attrType) {
+		IAttribute attr = attrNode.get(attrType);
+		if (attr != null) {
+			this.addAttr(attr);
+		}
+	}
+
+	/**
+	 * Remove attribute in this node, add copy from other if exists
+	 */
+	@Override
+	public <T extends IAttribute> void rewriteAttributeFrom(AttrNode attrNode, AType<T> attrType) {
+		remove(attrType);
+		copyAttributeFrom(attrNode, attrType);
 	}
 
 	private AttributeStorage initStorage() {
@@ -64,7 +81,7 @@ public abstract class AttrNode implements IAttributeNode {
 	}
 
 	@Override
-	public Annotation getAnnotation(String cls) {
+	public IAnnotation getAnnotation(String cls) {
 		return storage.getAnnotation(cls);
 	}
 

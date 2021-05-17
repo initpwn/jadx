@@ -1,17 +1,25 @@
 package jadx.gui.settings;
 
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.Arrays;
-import java.util.Collection;
+import java.util.*;
 
 import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 
 import say.swing.JFontChooser;
 
@@ -69,6 +77,7 @@ public class JadxSettingsWindow extends JDialog {
 		leftPanel.add(makeProjectGroup());
 		leftPanel.add(makeEditorGroup());
 		leftPanel.add(makeOtherGroup());
+		leftPanel.add(makeSearchResGroup());
 
 		rightPanel.add(makeDecompilationGroup());
 
@@ -113,10 +122,31 @@ public class JadxSettingsWindow extends JDialog {
 			}
 		});
 
+		JButton copyBtn = new JButton(NLS.str("preferences.copy"));
+		copyBtn.addActionListener(event -> {
+
+			JsonObject settingsJson = JadxSettingsAdapter.makeJsonObject(this.settings);
+			// remove irrelevant preferences
+			settingsJson.remove("windowPos");
+			settingsJson.remove("mainWindowExtendedState");
+			settingsJson.remove("lastSaveProjectPath");
+			settingsJson.remove("lastOpenFilePath");
+			settingsJson.remove("lastSaveFilePath");
+			settingsJson.remove("recentProjects");
+			String settingsText = new GsonBuilder().setPrettyPrinting().create().toJson(settingsJson);
+			Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+			StringSelection selection = new StringSelection(settingsText);
+			clipboard.setContents(selection, selection);
+			JOptionPane.showMessageDialog(
+					JadxSettingsWindow.this,
+					NLS.str("preferences.copy_message"));
+		});
+
 		JPanel buttonPane = new JPanel();
 		buttonPane.setLayout(new BoxLayout(buttonPane, BoxLayout.LINE_AXIS));
 		buttonPane.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		buttonPane.add(resetBtn);
+		buttonPane.add(copyBtn);
 		buttonPane.add(Box.createHorizontalGlue());
 		buttonPane.add(saveBtn);
 		buttonPane.add(Box.createRigidArea(new Dimension(10, 0)));
@@ -124,6 +154,7 @@ public class JadxSettingsWindow extends JDialog {
 
 		Container contentPane = getContentPane();
 		JScrollPane scrollPane = new JScrollPane(panel);
+		scrollPane.getVerticalScrollBar().setUnitIncrement(16);
 		scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 		contentPane.add(scrollPane, BorderLayout.CENTER);
 		contentPane.add(buttonPane, BorderLayout.PAGE_END);
@@ -260,6 +291,7 @@ public class JadxSettingsWindow extends JDialog {
 
 	private SettingsGroup makeEditorGroup() {
 		JButton fontBtn = new JButton(NLS.str("preferences.select_font"));
+		JButton smaliFontBtn = new JButton(NLS.str("preferences.select_smali_font"));
 
 		EditorTheme[] editorThemes = EditorTheme.getAllThemes();
 		JComboBox<EditorTheme> themesCbx = new JComboBox<>(editorThemes);
@@ -279,6 +311,7 @@ public class JadxSettingsWindow extends JDialog {
 		SettingsGroup group = new SettingsGroup(NLS.str("preferences.editor"));
 		JLabel fontLabel = group.addRow(getFontLabelStr(), fontBtn);
 		group.addRow(NLS.str("preferences.theme"), themesCbx);
+		JLabel smaliFontLabel = group.addRow(getSmaliFontLabelStr(), smaliFontBtn);
 
 		fontBtn.addMouseListener(new MouseAdapter() {
 			@Override
@@ -295,6 +328,22 @@ public class JadxSettingsWindow extends JDialog {
 				}
 			}
 		});
+
+		smaliFontBtn.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				JFontChooser fontChooser = new JPreferredFontChooser();
+				fontChooser.setSelectedFont(settings.getSmaliFont());
+				int result = fontChooser.showDialog(JadxSettingsWindow.this);
+				if (result == JFontChooser.OK_OPTION) {
+					Font font = fontChooser.getSelectedFont();
+					LOG.debug("Selected Font: {} for smali", font);
+					settings.setSmaliFont(font);
+					mainWindow.loadSettings();
+					smaliFontLabel.setText(getSmaliFontLabelStr());
+				}
+			}
+		});
 		return group;
 	}
 
@@ -302,6 +351,12 @@ public class JadxSettingsWindow extends JDialog {
 		Font font = settings.getFont();
 		String fontStyleName = FontUtils.convertFontStyleToString(font.getStyle());
 		return NLS.str("preferences.font") + ": " + font.getFontName() + ' ' + fontStyleName + ' ' + font.getSize();
+	}
+
+	private String getSmaliFontLabelStr() {
+		Font font = settings.getSmaliFont();
+		String fontStyleName = FontUtils.convertFontStyleToString(font.getStyle());
+		return NLS.str("preferences.smali_font") + ": " + font.getFontName() + ' ' + fontStyleName + ' ' + font.getSize();
 	}
 
 	private SettingsGroup makeDecompilationGroup() {
@@ -447,6 +502,51 @@ public class JadxSettingsWindow extends JDialog {
 		return group;
 	}
 
+	private SettingsGroup makeSearchResGroup() {
+		SettingsGroup group = new SettingsGroup(NLS.str("preferences.search_res_title"));
+		int prevSize = settings.getSrhResourceSkipSize();
+		String prevExts = settings.getSrhResourceFileExt();
+		SpinnerNumberModel sizeLimitModel = new SpinnerNumberModel(prevSize,
+				0, Integer.MAX_VALUE, 1);
+		JSpinner spinner = new JSpinner(sizeLimitModel);
+		JTextField fileExtField = new JTextField();
+		group.addRow(NLS.str("preferences.res_skip_file"), spinner);
+		group.addRow(NLS.str("preferences.res_file_ext"), fileExtField);
+
+		spinner.addChangeListener(new ChangeListener() {
+			@Override
+			public void stateChanged(ChangeEvent e) {
+				int size = (Integer) spinner.getValue();
+				settings.setSrhResourceSkipSize(size);
+			}
+		});
+
+		fileExtField.getDocument().addDocumentListener(new DocumentListener() {
+			private void update() {
+				String ext = fileExtField.getText();
+				settings.setSrhResourceFileExt(ext);
+			}
+
+			@Override
+			public void insertUpdate(DocumentEvent e) {
+				update();
+			}
+
+			@Override
+			public void removeUpdate(DocumentEvent e) {
+				update();
+			}
+
+			@Override
+			public void changedUpdate(DocumentEvent e) {
+				update();
+			}
+		});
+		fileExtField.setText(prevExts);
+
+		return group;
+	}
+
 	private void needReload() {
 		needReload = true;
 	}
@@ -499,6 +599,44 @@ public class JadxSettingsWindow extends JDialog {
 
 		public void end() {
 			add(Box.createVerticalGlue());
+		}
+	}
+
+	private static class JPreferredFontChooser extends JFontChooser {
+		private static final String[] PREFERRED_FONTS = new String[] {
+				"Monospaced", "Consolas", "Courier", "Courier New",
+				"Lucida Sans Typewriter", "Lucida Console",
+				"SimSun", "SimHei",
+		};
+
+		private String[] filteredFonts;
+
+		@Override
+		protected String[] getFontFamilies() {
+			if (filteredFonts == null) {
+				GraphicsEnvironment env = GraphicsEnvironment.getLocalGraphicsEnvironment();
+				Set<String> fontSet = new HashSet<>();
+				Collections.addAll(fontSet, env.getAvailableFontFamilyNames());
+				ArrayList<String> found = new ArrayList<>(PREFERRED_FONTS.length);
+				for (String font : PREFERRED_FONTS) {
+					if (fontSet.contains(font)) {
+						found.add(font);
+					}
+				}
+				if (found.size() == PREFERRED_FONTS.length) {
+					filteredFonts = PREFERRED_FONTS;
+				} else if (found.size() > 0) {
+					filteredFonts = new String[found.size()];
+					for (int i = 0; i < found.size(); i++) {
+						filteredFonts[i] = found.get(i);
+					}
+				} else {
+					// this machine is crazy.
+					LOG.warn("Can't found any preferred fonts for smali, use all available.");
+					filteredFonts = env.getAvailableFontFamilyNames();
+				}
+			}
+			return filteredFonts;
 		}
 	}
 }

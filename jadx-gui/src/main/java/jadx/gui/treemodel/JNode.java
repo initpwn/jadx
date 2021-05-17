@@ -75,6 +75,10 @@ public abstract class JNode extends DefaultMutableTreeNode {
 		return javaNode.getName();
 	}
 
+	public boolean canRename() {
+		return false;
+	}
+
 	public abstract String makeString();
 
 	public String makeStringHtml() {
@@ -95,6 +99,14 @@ public abstract class JNode extends DefaultMutableTreeNode {
 
 	public String makeLongStringHtml() {
 		return makeLongString();
+	}
+
+	public int getPos() {
+		JavaNode javaNode = getJavaNode();
+		if (javaNode == null) {
+			return -1;
+		}
+		return javaNode.getDefPos();
 	}
 
 	@Override

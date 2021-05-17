@@ -1,9 +1,9 @@
 package jadx.core.codegen;
 
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import jadx.core.deobf.NameMapper;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.LiteralArg;
@@ -71,11 +71,7 @@ public class TypeGen {
 			case BOOLEAN:
 				return lit == 0 ? "false" : "true";
 			case CHAR:
-				char ch = (char) lit;
-				if (!NameMapper.isPrintableChar(ch)) {
-					return Integer.toString(ch);
-				}
-				return stringUtils.unescapeChar(ch);
+				return stringUtils.unescapeChar((char) lit, cast);
 			case BYTE:
 				return formatByte(lit, cast);
 			case SHORT:
@@ -99,6 +95,43 @@ public class TypeGen {
 
 			default:
 				throw new JadxRuntimeException("Unknown type in literalToString: " + type);
+		}
+	}
+
+	@Nullable
+	public static String literalToRawString(LiteralArg arg) {
+		ArgType type = arg.getType();
+		if (type == null) {
+			return null;
+		}
+		long lit = arg.getLiteral();
+		switch (type.getPrimitiveType()) {
+			case BOOLEAN:
+				return lit == 0 ? "false" : "true";
+			case CHAR:
+				return String.valueOf((char) lit);
+
+			case BYTE:
+			case SHORT:
+			case INT:
+			case LONG:
+				return Long.toString(lit);
+
+			case FLOAT:
+				return Float.toString(Float.intBitsToFloat((int) lit));
+			case DOUBLE:
+				return Double.toString(Double.longBitsToDouble(lit));
+
+			case OBJECT:
+			case ARRAY:
+				if (lit != 0) {
+					LOG.warn("Wrong object literal: {} for type: {}", lit, type);
+					return Long.toString(lit);
+				}
+				return "null";
+
+			default:
+				return null;
 		}
 	}
 

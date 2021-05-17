@@ -1,6 +1,5 @@
 package jadx.core.codegen;
 
-import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
@@ -10,14 +9,15 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import jadx.core.Consts;
+import jadx.api.ICodeWriter;
+import jadx.api.data.annotations.InsnCodeOffset;
+import jadx.api.plugins.input.data.MethodHandleType;
 import jadx.core.deobf.NameMapper;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.nodes.FieldReplaceAttr;
 import jadx.core.dex.attributes.nodes.GenericInfoAttr;
 import jadx.core.dex.attributes.nodes.LoopLabelAttr;
-import jadx.core.dex.attributes.nodes.MethodInlineAttr;
 import jadx.core.dex.attributes.nodes.SkipMethodArgsAttr;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.info.FieldInfo;
@@ -27,16 +27,17 @@ import jadx.core.dex.instructions.ArithOp;
 import jadx.core.dex.instructions.BaseInvokeNode;
 import jadx.core.dex.instructions.ConstClassNode;
 import jadx.core.dex.instructions.ConstStringNode;
-import jadx.core.dex.instructions.FillArrayNode;
+import jadx.core.dex.instructions.FillArrayInsn;
 import jadx.core.dex.instructions.FilledNewArrayNode;
 import jadx.core.dex.instructions.GotoNode;
 import jadx.core.dex.instructions.IfNode;
 import jadx.core.dex.instructions.IndexInsnNode;
 import jadx.core.dex.instructions.InsnType;
+import jadx.core.dex.instructions.InvokeCustomNode;
 import jadx.core.dex.instructions.InvokeNode;
 import jadx.core.dex.instructions.InvokeType;
 import jadx.core.dex.instructions.NewArrayNode;
-import jadx.core.dex.instructions.SwitchNode;
+import jadx.core.dex.instructions.SwitchInsn;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.CodeVar;
 import jadx.core.dex.instructions.args.InsnArg;
@@ -53,10 +54,13 @@ import jadx.core.dex.nodes.FieldNode;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.nodes.RootNode;
+import jadx.core.dex.nodes.VariableNode;
+import jadx.core.utils.CodeGenUtils;
 import jadx.core.utils.RegionUtils;
 import jadx.core.utils.exceptions.CodegenException;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
+import static jadx.core.dex.nodes.VariableNode.VarKind;
 import static jadx.core.utils.android.AndroidResourcesUtils.handleAppResField;
 
 public class InsnGen {
@@ -66,7 +70,6 @@ public class InsnGen {
 	protected final MethodNode mth;
 	protected final RootNode root;
 	protected final boolean fallback;
-	protected final boolean attachInsns;
 
 	protected enum Flags {
 		BODY_ONLY,
@@ -79,40 +82,52 @@ public class InsnGen {
 		this.mth = mgen.getMethodNode();
 		this.root = mth.root();
 		this.fallback = fallback;
-		this.attachInsns = root.getArgs().isJsonOutput();
 	}
 
 	private boolean isFallback() {
 		return fallback;
 	}
 
-	public void addArgDot(CodeWriter code, InsnArg arg) throws CodegenException {
-		int len = code.bufLength();
+	public void addArgDot(ICodeWriter code, InsnArg arg) throws CodegenException {
+		int len = code.getLength();
 		addArg(code, arg, true);
-		if (len != code.bufLength()) {
+		if (len != code.getLength()) {
 			code.add('.');
 		}
 	}
 
-	public void addArg(CodeWriter code, InsnArg arg) throws CodegenException {
+	public void addArg(ICodeWriter code, InsnArg arg) throws CodegenException {
 		addArg(code, arg, true);
 	}
 
-	public void addArg(CodeWriter code, InsnArg arg, boolean wrap) throws CodegenException {
+	public void addArg(ICodeWriter code, InsnArg arg, boolean wrap) throws CodegenException {
 		if (arg.isRegister()) {
+			CodeVar codeVar = CodeGenUtils.getCodeVar((RegisterArg) arg);
+			if (codeVar != null) {
+				VariableNode node = mth.getVariable(codeVar.getIndex());
+				if (node != null) {
+					code.attachAnnotation(node);
+				}
+			}
 			code.add(mgen.getNameGen().useArg((RegisterArg) arg));
 		} else if (arg.isLiteral()) {
 			code.add(lit((LiteralArg) arg));
 		} else if (arg.isInsnWrap()) {
 			addWrappedArg(code, (InsnWrapArg) arg, wrap);
 		} else if (arg.isNamed()) {
+			if (arg instanceof NamedArg) {
+				VariableNode node = mth.getVariable(((NamedArg) arg).getIndex());
+				if (node != null) {
+					code.attachAnnotation(node);
+				}
+			}
 			code.add(((Named) arg).getName());
 		} else {
 			throw new CodegenException("Unknown arg type " + arg);
 		}
 	}
 
-	private void addWrappedArg(CodeWriter code, InsnWrapArg arg, boolean wrap) throws CodegenException {
+	private void addWrappedArg(ICodeWriter code, InsnWrapArg arg, boolean wrap) throws CodegenException {
 		InsnNode wrapInsn = arg.getWrapInsn();
 		if (wrapInsn.contains(AFlag.FORCE_ASSIGN_INLINE)) {
 			code.add('(');
@@ -124,7 +139,7 @@ public class InsnGen {
 		}
 	}
 
-	public void assignVar(CodeWriter code, InsnNode insn) throws CodegenException {
+	public void assignVar(ICodeWriter code, InsnNode insn) throws CodegenException {
 		RegisterArg arg = insn.getResult();
 		if (insn.contains(AFlag.DECLARE_VAR)) {
 			declareVar(code, arg);
@@ -133,26 +148,35 @@ public class InsnGen {
 		}
 	}
 
-	public void declareVar(CodeWriter code, RegisterArg arg) {
+	public void declareVar(ICodeWriter code, RegisterArg arg) {
 		declareVar(code, arg.getSVar().getCodeVar());
 	}
 
-	public void declareVar(CodeWriter code, CodeVar codeVar) {
+	public void declareVar(ICodeWriter code, CodeVar codeVar) {
 		if (codeVar.isFinal()) {
 			code.add("final ");
 		}
 		useType(code, codeVar.getType());
 		code.add(' ');
-		code.add(mgen.getNameGen().assignArg(codeVar));
+		VariableNode node = mth.declareVar(codeVar, mgen.getNameGen(), VarKind.VAR);
+		String name;
+		if (node != null) {
+			code.attachDefinition(node);
+			name = node.getName();
+			codeVar.setName(name);
+		} else {
+			name = mgen.getNameGen().assignArg(codeVar);
+		}
+		code.add(name);
 	}
 
 	private String lit(LiteralArg arg) {
 		return TypeGen.literalToString(arg, mth, fallback);
 	}
 
-	private void instanceField(CodeWriter code, FieldInfo field, InsnArg arg) throws CodegenException {
+	private void instanceField(ICodeWriter code, FieldInfo field, InsnArg arg) throws CodegenException {
 		ClassNode pCls = mth.getParentClass();
-		FieldNode fieldNode = pCls.dex().root().deepResolveField(field);
+		FieldNode fieldNode = pCls.root().deepResolveField(field);
 		if (fieldNode != null) {
 			FieldReplaceAttr replace = fieldNode.get(AType.FIELD_REPLACE);
 			if (replace != null) {
@@ -179,7 +203,7 @@ public class InsnGen {
 		}
 	}
 
-	public static void makeStaticFieldAccess(CodeWriter code, FieldInfo field, ClassGen clsGen) {
+	public static void makeStaticFieldAccess(ICodeWriter code, FieldInfo field, ClassGen clsGen) {
 		ClassInfo declClass = field.getDeclClass();
 		// TODO
 		boolean fieldFromThisClass = clsGen.getClassNode().getClassInfo().equals(declClass);
@@ -190,7 +214,7 @@ public class InsnGen {
 			}
 			code.add('.');
 		}
-		FieldNode fieldNode = clsGen.getClassNode().dex().root().deepResolveField(field);
+		FieldNode fieldNode = clsGen.getClassNode().root().deepResolveField(field);
 		if (fieldNode != null) {
 			code.attachAnnotation(fieldNode);
 		}
@@ -201,23 +225,23 @@ public class InsnGen {
 		}
 	}
 
-	protected void staticField(CodeWriter code, FieldInfo field) {
+	protected void staticField(ICodeWriter code, FieldInfo field) {
 		makeStaticFieldAccess(code, field, mgen.getClassGen());
 	}
 
-	public void useClass(CodeWriter code, ArgType type) {
+	public void useClass(ICodeWriter code, ArgType type) {
 		mgen.getClassGen().useClass(code, type);
 	}
 
-	public void useClass(CodeWriter code, ClassInfo cls) {
+	public void useClass(ICodeWriter code, ClassInfo cls) {
 		mgen.getClassGen().useClass(code, cls);
 	}
 
-	protected void useType(CodeWriter code, ArgType type) {
+	protected void useType(ICodeWriter code, ArgType type) {
 		mgen.getClassGen().useType(code, type);
 	}
 
-	public void makeInsn(InsnNode insn, CodeWriter code) throws CodegenException {
+	public void makeInsn(InsnNode insn, ICodeWriter code) throws CodegenException {
 		makeInsn(insn, code, null);
 	}
 
@@ -225,7 +249,7 @@ public class InsnGen {
 	private static final Set<Flags> BODY_ONLY_FLAG = EnumSet.of(Flags.BODY_ONLY);
 	private static final Set<Flags> BODY_ONLY_NOWRAP_FLAGS = EnumSet.of(Flags.BODY_ONLY_NOWRAP);
 
-	protected void makeInsn(InsnNode insn, CodeWriter code, Flags flag) throws CodegenException {
+	protected void makeInsn(InsnNode insn, ICodeWriter code, Flags flag) throws CodegenException {
 		if (insn.getType() == InsnType.REGION_ARG) {
 			return;
 		}
@@ -235,9 +259,7 @@ public class InsnGen {
 			} else {
 				if (flag != Flags.INLINE) {
 					code.startLineWithNum(insn.getSourceLine());
-					if (attachInsns) {
-						code.attachLineAnnotation(insn);
-					}
+					InsnCodeOffset.attach(code, insn);
 					if (insn.contains(AFlag.COMMENT_OUT)) {
 						code.add("// ");
 					}
@@ -253,6 +275,7 @@ public class InsnGen {
 				makeInsnBody(code, insn, EMPTY_FLAGS);
 				if (flag != Flags.INLINE) {
 					code.add(';');
+					CodeGenUtils.addCodeComments(code, insn);
 				}
 			}
 		} catch (Exception e) {
@@ -260,11 +283,11 @@ public class InsnGen {
 		}
 	}
 
-	private void makeInsnBody(CodeWriter code, InsnNode insn, Set<Flags> state) throws CodegenException {
+	private void makeInsnBody(ICodeWriter code, InsnNode insn, Set<Flags> state) throws CodegenException {
 		switch (insn.getType()) {
 			case CONST_STR:
 				String str = ((ConstStringNode) insn).getString();
-				code.add(mth.dex().root().getStringUtils().unescapeString(str));
+				code.add(mth.root().getStringUtils().unescapeString(str));
 				break;
 
 			case CONST_CLASS:
@@ -395,7 +418,7 @@ public class InsnGen {
 				break;
 
 			case FILL_ARRAY:
-				FillArrayNode arrayNode = (FillArrayNode) insn;
+				FillArrayInsn arrayNode = (FillArrayInsn) insn;
 				if (fallback) {
 					String arrStr = arrayNode.dataToString();
 					addArg(code, insn.getArg(0));
@@ -509,15 +532,16 @@ public class InsnGen {
 
 			case SWITCH:
 				fallbackOnlyInsn(insn);
-				SwitchNode sw = (SwitchNode) insn;
+				SwitchInsn sw = (SwitchInsn) insn;
 				code.add("switch(");
 				addArg(code, insn.getArg(0));
 				code.add(") {");
 				code.incIndent();
-				for (int i = 0; i < sw.getCasesCount(); i++) {
-					String key = sw.getKeys()[i].toString();
-					code.startLine("case ").add(key).add(": goto ");
-					code.add(MethodGen.getLabelName(sw.getTargets()[i])).add(';');
+				int[] keys = sw.getKeys();
+				int[] targets = sw.getTargets();
+				for (int i = 0; i < keys.length; i++) {
+					code.startLine("case ").add(Integer.toString(keys[i])).add(": goto ");
+					code.add(MethodGen.getLabelName(targets[i])).add(';');
 				}
 				code.startLine("default: goto ");
 				code.add(MethodGen.getLabelName(sw.getDefaultCaseOffset())).add(';');
@@ -541,6 +565,21 @@ public class InsnGen {
 				code.add(')');
 				break;
 
+			case MOVE_RESULT:
+				fallbackOnlyInsn(insn);
+				code.add("move-result");
+				break;
+
+			case FILL_ARRAY_DATA:
+				fallbackOnlyInsn(insn);
+				code.add("fill-array " + insn.toString());
+				break;
+
+			case SWITCH_DATA:
+				fallbackOnlyInsn(insn);
+				code.add(insn.toString());
+				break;
+
 			default:
 				throw new CodegenException(mth, "Unknown instruction: " + insn.getType());
 		}
@@ -550,11 +589,19 @@ public class InsnGen {
 	 * In most cases must be combined with new array instructions.
 	 * Use one by one array fill (can be replaced with System.arrayCopy)
 	 */
-	private void fillArray(CodeWriter code, FillArrayNode arrayNode) throws CodegenException {
+	private void fillArray(ICodeWriter code, FillArrayInsn arrayNode) throws CodegenException {
 		code.add("// fill-array-data instruction");
 		code.startLine();
-		List<LiteralArg> args = arrayNode.getLiteralArgs(arrayNode.getElementType());
 		InsnArg arrArg = arrayNode.getArg(0);
+		ArgType arrayType = arrArg.getType();
+		ArgType elemType;
+		if (arrayType.isTypeKnown() && arrayType.isArray()) {
+			elemType = arrayType.getArrayElement();
+		} else {
+			ArgType elementType = arrayNode.getElementType(); // unknown type
+			elemType = elementType.selectFirst();
+		}
+		List<LiteralArg> args = arrayNode.getLiteralArgs(elemType);
 		int len = args.size();
 		for (int i = 0; i < len; i++) {
 			if (i != 0) {
@@ -566,7 +613,7 @@ public class InsnGen {
 		}
 	}
 
-	private void oneArgInsn(CodeWriter code, InsnNode insn, Set<Flags> state, char op) throws CodegenException {
+	private void oneArgInsn(ICodeWriter code, InsnNode insn, Set<Flags> state, char op) throws CodegenException {
 		boolean wrap = state.contains(Flags.BODY_ONLY);
 		if (wrap) {
 			code.add('(');
@@ -588,7 +635,7 @@ public class InsnGen {
 		}
 	}
 
-	private void filledNewArray(FilledNewArrayNode insn, CodeWriter code) throws CodegenException {
+	private void filledNewArray(FilledNewArrayNode insn, ICodeWriter code) throws CodegenException {
 		if (!insn.contains(AFlag.DECLARE_VAR)) {
 			code.add("new ");
 			useType(code, insn.getArrayType());
@@ -604,8 +651,8 @@ public class InsnGen {
 		code.add('}');
 	}
 
-	private void makeConstructor(ConstructorInsn insn, CodeWriter code) throws CodegenException {
-		ClassNode cls = mth.dex().resolveClass(insn.getClassType());
+	private void makeConstructor(ConstructorInsn insn, ICodeWriter code) throws CodegenException {
+		ClassNode cls = mth.root().resolveClass(insn.getClassType());
 		if (cls != null && cls.isAnonymous() && !fallback) {
 			cls.ensureProcessed();
 			inlineAnonymousConstructor(code, cls, insn);
@@ -639,11 +686,11 @@ public class InsnGen {
 				code.add('>');
 			}
 		}
-		MethodNode callMth = mth.dex().resolveMethod(insn.getCallMth());
+		MethodNode callMth = mth.root().resolveMethod(insn.getCallMth());
 		generateMethodArguments(code, insn, 0, callMth);
 	}
 
-	private void inlineAnonymousConstructor(CodeWriter code, ClassNode cls, ConstructorInsn insn) throws CodegenException {
+	private void inlineAnonymousConstructor(ICodeWriter code, ClassNode cls, ConstructorInsn insn) throws CodegenException {
 		if (this.mth.getParentClass() == cls) {
 			cls.remove(AFlag.ANONYMOUS_CLASS);
 			cls.remove(AFlag.DONT_GENERATE);
@@ -673,23 +720,25 @@ public class InsnGen {
 		} else {
 			useClass(code, parent);
 		}
-		MethodNode callMth = mth.dex().resolveMethod(insn.getCallMth());
+		MethodNode callMth = mth.root().resolveMethod(insn.getCallMth());
 		generateMethodArguments(code, insn, 0, callMth);
 		code.add(' ');
-		new ClassGen(cls, mgen.getClassGen().getParentGen()).addClassBody(code, true);
+
+		ClassGen classGen = new ClassGen(cls, mgen.getClassGen().getParentGen());
+		classGen.setOuterNameGen(mgen.getNameGen());
+		classGen.addClassBody(code, true);
 	}
 
-	private void makeInvoke(InvokeNode insn, CodeWriter code) throws CodegenException {
-		MethodInfo callMth = insn.getCallMth();
-
-		// inline method
-		MethodNode callMthNode = mth.root().deepResolveMethod(callMth);
-		if (callMthNode != null && inlineMethod(callMthNode, insn, code)) {
+	private void makeInvoke(InvokeNode insn, ICodeWriter code) throws CodegenException {
+		InvokeType type = insn.getInvokeType();
+		if (type == InvokeType.CUSTOM) {
+			makeInvokeLambda(code, (InvokeCustomNode) insn);
 			return;
 		}
+		MethodInfo callMth = insn.getCallMth();
+		MethodNode callMthNode = mth.root().deepResolveMethod(callMth);
 
 		int k = 0;
-		InvokeType type = insn.getInvokeType();
 		switch (type) {
 			case DIRECT:
 			case VIRTUAL:
@@ -731,8 +780,123 @@ public class InsnGen {
 		generateMethodArguments(code, insn, k, callMthNode);
 	}
 
+	private void makeInvokeLambda(ICodeWriter code, InvokeCustomNode customNode) throws CodegenException {
+		if (customNode.isUseRef()) {
+			makeRefLambda(code, customNode);
+			return;
+		}
+		if (fallback || !customNode.isInlineInsn()) {
+			makeSimpleLambda(code, customNode);
+			return;
+		}
+		MethodNode callMth = (MethodNode) customNode.getCallInsn().get(AType.METHOD_DETAILS);
+		makeInlinedLambdaMethod(code, customNode, callMth);
+	}
+
+	private void makeRefLambda(ICodeWriter code, InvokeCustomNode customNode) {
+		InsnNode callInsn = customNode.getCallInsn();
+		if (callInsn instanceof ConstructorInsn) {
+			MethodInfo callMth = ((ConstructorInsn) callInsn).getCallMth();
+			useClass(code, callMth.getDeclClass());
+			code.add("::new");
+			return;
+		}
+		if (callInsn instanceof InvokeNode) {
+			InvokeNode invokeInsn = (InvokeNode) callInsn;
+			MethodInfo callMth = invokeInsn.getCallMth();
+			if (customNode.getHandleType() == MethodHandleType.INVOKE_STATIC) {
+				useClass(code, callMth.getDeclClass());
+			} else {
+				code.add("this");
+			}
+			code.add("::").add(callMth.getAlias());
+		}
+	}
+
+	private void makeSimpleLambda(ICodeWriter code, InvokeCustomNode customNode) {
+		try {
+			InsnNode callInsn = customNode.getCallInsn();
+			MethodInfo implMthInfo = customNode.getImplMthInfo();
+			int implArgsCount = implMthInfo.getArgsCount();
+			if (implArgsCount == 0) {
+				code.add("()");
+			} else {
+				code.add('(');
+				int callArgsCount = callInsn.getArgsCount();
+				int startArg = callArgsCount - implArgsCount;
+				if (customNode.getHandleType() != MethodHandleType.INVOKE_STATIC
+						&& customNode.getArgsCount() > 0
+						&& customNode.getArg(0).isThis()) {
+					callInsn.getArg(0).add(AFlag.THIS);
+				}
+				if (startArg >= 0) {
+					for (int i = startArg; i < callArgsCount; i++) {
+						if (i != startArg) {
+							code.add(", ");
+						}
+						addArg(code, callInsn.getArg(i));
+					}
+				} else {
+					code.add("/* ERROR: " + startArg + " */");
+				}
+				code.add(')');
+			}
+			code.add(" -> {");
+			if (fallback) {
+				code.add(" // ").add(implMthInfo.toString());
+			}
+			code.incIndent();
+			code.startLine();
+			if (!implMthInfo.getReturnType().isVoid()) {
+				code.add("return ");
+			}
+			makeInsn(callInsn, code, Flags.INLINE);
+			code.add(";");
+
+			code.decIndent();
+			code.startLine('}');
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to generate 'invoke-custom' instruction: " + e.getMessage(), e);
+		}
+	}
+
+	private void makeInlinedLambdaMethod(ICodeWriter code, InvokeCustomNode customNode, MethodNode callMth) throws CodegenException {
+		MethodGen callMthGen = new MethodGen(mgen.getClassGen(), callMth);
+		NameGen nameGen = callMthGen.getNameGen();
+		nameGen.inheritUsedNames(this.mgen.getNameGen());
+
+		List<ArgType> implArgs = customNode.getImplMthInfo().getArgumentsTypes();
+		List<RegisterArg> callArgs = callMth.getArgRegs();
+		if (implArgs.isEmpty()) {
+			code.add("()");
+		} else {
+			int callArgsCount = callArgs.size();
+			int startArg = callArgsCount - implArgs.size();
+			for (int i = startArg; i < callArgsCount; i++) {
+				if (i != startArg) {
+					code.add(", ");
+				}
+				CodeVar argCodeVar = callArgs.get(i).getSVar().getCodeVar();
+				code.add(nameGen.assignArg(argCodeVar));
+			}
+		}
+		// force set external arg names into call method args
+		int extArgsCount = customNode.getArgsCount();
+		int startArg = customNode.getHandleType() == MethodHandleType.INVOKE_STATIC ? 0 : 1; // skip 'this' arg
+		for (int i = startArg; i < extArgsCount; i++) {
+			RegisterArg extArg = (RegisterArg) customNode.getArg(i);
+			callArgs.get(i).setName(extArg.getName());
+		}
+		code.add(" -> {");
+		code.incIndent();
+		callMthGen.addInstructions(code);
+
+		code.decIndent();
+		code.startLine('}');
+	}
+
 	@Nullable
-	private ClassInfo getClassForSuperCall(CodeWriter code, MethodInfo callMth) {
+	private ClassInfo getClassForSuperCall(ICodeWriter code, MethodInfo callMth) {
 		ClassNode useCls = mth.getParentClass();
 		ClassInfo insnCls = useCls.getClassInfo();
 		ClassInfo declClass = callMth.getDeclClass();
@@ -761,7 +925,7 @@ public class InsnGen {
 		return useCls.getParentClass().getClassInfo();
 	}
 
-	void generateMethodArguments(CodeWriter code, BaseInvokeNode insn, int startArgNum,
+	void generateMethodArguments(ICodeWriter code, BaseInvokeNode insn, int startArgNum,
 			@Nullable MethodNode mthNode) throws CodegenException {
 		int k = startArgNum;
 		if (mthNode != null && mthNode.contains(AFlag.SKIP_FIRST_ARG)) {
@@ -798,7 +962,7 @@ public class InsnGen {
 	/**
 	 * Expand varArgs from filled array.
 	 */
-	private boolean processVarArg(CodeWriter code, BaseInvokeNode invokeInsn, InsnArg lastArg) throws CodegenException {
+	private boolean processVarArg(ICodeWriter code, BaseInvokeNode invokeInsn, InsnArg lastArg) throws CodegenException {
 		if (!invokeInsn.contains(AFlag.VARARG_CALL)) {
 			return false;
 		}
@@ -820,65 +984,7 @@ public class InsnGen {
 		return true;
 	}
 
-	private boolean inlineMethod(MethodNode callMthNode, InvokeNode insn, CodeWriter code) throws CodegenException {
-		MethodInlineAttr mia = callMthNode.get(AType.METHOD_INLINE);
-		if (mia == null) {
-			return false;
-		}
-		InsnNode inl = mia.getInsn();
-		if (Consts.DEBUG) {
-			code.add("/* inline method: ").add(callMthNode.toString()).add("*/").startLine();
-		}
-		if (forceAssign(inl, insn, callMthNode)) {
-			ArgType varType = callMthNode.getReturnType();
-			useType(code, varType);
-			code.add(' ');
-			code.add(mgen.getNameGen().assignNamedArg(new NamedArg("unused", varType)));
-			code.add(" = ");
-		}
-		if (callMthNode.getMethodInfo().getArgumentsTypes().isEmpty()) {
-			makeInsn(inl, code, Flags.BODY_ONLY);
-		} else {
-			// remap args
-			InsnArg[] regs = new InsnArg[callMthNode.getRegsCount()];
-			int[] regNums = mia.getArgsRegNums();
-			for (int i = 0; i < regNums.length; i++) {
-				InsnArg arg = insn.getArg(i);
-				regs[regNums[i]] = arg;
-			}
-			// replace args
-			InsnNode inlCopy = inl.copyWithoutResult();
-			List<RegisterArg> inlArgs = new ArrayList<>();
-			inlCopy.getRegisterArgs(inlArgs);
-			for (RegisterArg r : inlArgs) {
-				int regNum = r.getRegNum();
-				if (regNum >= regs.length) {
-					LOG.warn("Unknown register number {} in method call: {} from {}", r, callMthNode, mth);
-				} else {
-					InsnArg repl = regs[regNum];
-					if (repl == null) {
-						LOG.warn("Not passed register {} in method call: {} from {}", r, callMthNode, mth);
-					} else {
-						inlCopy.replaceArg(r, repl);
-					}
-				}
-			}
-			makeInsn(inlCopy, code, Flags.BODY_ONLY);
-		}
-		return true;
-	}
-
-	private boolean forceAssign(InsnNode inlineInsn, InvokeNode parentInsn, MethodNode callMthNode) {
-		if (parentInsn.getResult() != null) {
-			return false;
-		}
-		if (parentInsn.contains(AFlag.WRAPPED)) {
-			return false;
-		}
-		return !callMthNode.isVoidReturn();
-	}
-
-	private void makeTernary(TernaryInsn insn, CodeWriter code, Set<Flags> state) throws CodegenException {
+	private void makeTernary(TernaryInsn insn, ICodeWriter code, Set<Flags> state) throws CodegenException {
 		boolean wrap = state.contains(Flags.BODY_ONLY);
 		if (wrap) {
 			code.add('(');
@@ -886,7 +992,7 @@ public class InsnGen {
 		InsnArg first = insn.getArg(0);
 		InsnArg second = insn.getArg(1);
 		ConditionGen condGen = new ConditionGen(this);
-		if (first.equals(LiteralArg.TRUE) && second.equals(LiteralArg.FALSE)) {
+		if (first.isTrue() && second.isFalse()) {
 			condGen.add(code, insn.getCondition());
 		} else {
 			condGen.wrap(code, insn.getCondition());
@@ -901,7 +1007,7 @@ public class InsnGen {
 		}
 	}
 
-	private void addCastIfNeeded(CodeWriter code, InsnArg first, InsnArg second) {
+	private void addCastIfNeeded(ICodeWriter code, InsnArg first, InsnArg second) {
 		if (first.isLiteral() && second.isLiteral()) {
 			if (first.getType() == ArgType.BYTE) {
 				long lit1 = ((LiteralArg) first).getLiteral();
@@ -928,7 +1034,7 @@ public class InsnGen {
 		}
 	}
 
-	private void makeArith(ArithNode insn, CodeWriter code, Set<Flags> state) throws CodegenException {
+	private void makeArith(ArithNode insn, ICodeWriter code, Set<Flags> state) throws CodegenException {
 		if (insn.contains(AFlag.ARITH_ONEARG)) {
 			makeArithOneArg(insn, code);
 			return;
@@ -948,7 +1054,7 @@ public class InsnGen {
 		}
 	}
 
-	private void makeArithOneArg(ArithNode insn, CodeWriter code) throws CodegenException {
+	private void makeArithOneArg(ArithNode insn, ICodeWriter code) throws CodegenException {
 		ArithOp op = insn.getOp();
 		InsnArg resArg = insn.getArg(0);
 		InsnArg arg = insn.getArg(1);

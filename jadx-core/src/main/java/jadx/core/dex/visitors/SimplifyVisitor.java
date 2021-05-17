@@ -4,10 +4,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.core.Consts;
+import jadx.core.codegen.TypeGen;
 import jadx.core.deobf.NameMapper;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.info.ClassInfo;
@@ -260,8 +262,7 @@ public class SimplifyVisitor extends AbstractVisitor {
 		if (f.isInsnWrap()) {
 			InsnNode wi = ((InsnWrapArg) f).getWrapInsn();
 			if (wi.getType() == InsnType.CMP_L || wi.getType() == InsnType.CMP_G) {
-				if (insn.getArg(1).isLiteral()
-						&& ((LiteralArg) insn.getArg(1)).getLiteral() == 0) {
+				if (insn.getArg(1).isZeroLiteral()) {
 					insn.changeCondition(insn.getOp(), wi.getArg(0), wi.getArg(1));
 				} else {
 					LOG.warn("TODO: cmp {}", insn);
@@ -387,7 +388,7 @@ public class SimplifyVisitor extends AbstractVisitor {
 				}
 			}
 			if (!stringArgFound) {
-				// TODO: convert one arg to string using `String.valueOf()`
+				mth.addDebugComment("TODO: convert one arg to string using `String.valueOf()`, args: " + args);
 				return null;
 			}
 
@@ -395,17 +396,91 @@ public class SimplifyVisitor extends AbstractVisitor {
 			removeStringBuilderInsns(mth, toStrInsn, chain);
 
 			List<InsnArg> dupArgs = Utils.collectionMap(args, InsnArg::duplicate);
-			InsnNode concatInsn = new InsnNode(InsnType.STR_CONCAT, dupArgs);
+			List<InsnArg> simplifiedArgs = concatConstArgs(dupArgs);
+			InsnNode concatInsn = new InsnNode(InsnType.STR_CONCAT, simplifiedArgs);
 			concatInsn.setResult(toStrInsn.getResult());
 			concatInsn.add(AFlag.SYNTHETIC);
 			concatInsn.copyAttributesFrom(toStrInsn);
 			concatInsn.remove(AFlag.DONT_GENERATE);
 			concatInsn.remove(AFlag.REMOVE);
+			checkResult(mth, concatInsn);
 			return concatInsn;
 		} catch (Exception e) {
 			LOG.warn("Can't convert string concatenation: {} insn: {}", mth, toStrInsn, e);
 		}
 		return null;
+	}
+
+	private static boolean isConstConcatNeeded(List<InsnArg> args) {
+		boolean prevConst = false;
+		for (InsnArg arg : args) {
+			boolean curConst = arg.isConst();
+			if (curConst && prevConst) {
+				// found 2 consecutive constants
+				return true;
+			}
+			prevConst = curConst;
+		}
+		return false;
+	}
+
+	private static List<InsnArg> concatConstArgs(List<InsnArg> args) {
+		if (!isConstConcatNeeded(args)) {
+			return args;
+		}
+		int size = args.size();
+		List<InsnArg> newArgs = new ArrayList<>(size);
+		List<String> concatList = new ArrayList<>(size);
+		for (int i = 0; i < size; i++) {
+			InsnArg arg = args.get(i);
+			String constStr = getConstString(arg);
+			if (constStr != null) {
+				concatList.add(constStr);
+			} else {
+				if (!concatList.isEmpty()) {
+					newArgs.add(getConcatArg(concatList, args, i));
+					concatList.clear();
+				}
+				newArgs.add(arg);
+			}
+		}
+		if (!concatList.isEmpty()) {
+			newArgs.add(getConcatArg(concatList, args, size));
+		}
+		return newArgs;
+	}
+
+	private static InsnArg getConcatArg(List<String> concatList, List<InsnArg> args, int idx) {
+		if (concatList.size() == 1) {
+			return args.get(idx - 1);
+		}
+		String str = Utils.concatStrings(concatList);
+		return InsnArg.wrapArg(new ConstStringNode(str));
+	}
+
+	@Nullable
+	private static String getConstString(InsnArg arg) {
+		if (arg.isLiteral()) {
+			return TypeGen.literalToRawString((LiteralArg) arg);
+		}
+		if (arg.isInsnWrap()) {
+			InsnNode wrapInsn = ((InsnWrapArg) arg).getWrapInsn();
+			if (wrapInsn instanceof ConstStringNode) {
+				return ((ConstStringNode) wrapInsn).getString();
+			}
+		}
+		return null;
+	}
+
+	/* String concat without assign to variable will cause compilation error */
+	private static void checkResult(MethodNode mth, InsnNode concatInsn) {
+		if (concatInsn.getResult() == null) {
+			RegisterArg resArg = InsnArg.reg(0, ArgType.STRING);
+			SSAVar ssaVar = mth.makeNewSVar(resArg);
+			InitCodeVariables.initCodeVar(ssaVar);
+			ssaVar.setType(ArgType.STRING);
+			concatInsn.setResult(resArg);
+		}
 	}
 
 	/**

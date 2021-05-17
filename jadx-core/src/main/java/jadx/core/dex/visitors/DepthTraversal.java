@@ -19,10 +19,10 @@ public class DepthTraversal {
 	}
 
 	public static void visit(IDexTreeVisitor visitor, MethodNode mth) {
-		if (mth.contains(AType.JADX_ERROR)) {
-			return;
-		}
 		try {
+			if (mth.contains(AType.JADX_ERROR)) {
+				return;
+			}
 			visitor.visit(mth);
 			if (DebugChecks.checksEnabled) {
 				DebugChecks.runChecksAfterVisitor(mth, visitor);

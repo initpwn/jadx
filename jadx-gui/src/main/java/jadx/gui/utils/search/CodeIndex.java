@@ -9,59 +9,51 @@ import org.slf4j.LoggerFactory;
 import io.reactivex.BackpressureStrategy;
 import io.reactivex.Flowable;
 
+import jadx.api.JavaClass;
+import jadx.gui.treemodel.CodeNode;
+import jadx.gui.treemodel.JClass;
 import jadx.gui.utils.UiUtils;
 
-public class CodeIndex<T> implements SearchIndex<T> {
+public class CodeIndex {
 
 	private static final Logger LOG = LoggerFactory.getLogger(CodeIndex.class);
 
-	private final List<StringRef> keys = new ArrayList<>();
-	private final List<T> values = new ArrayList<>();
+	private final List<CodeNode> values = new ArrayList<>();
 
-	@Override
-	public void put(String str, T value) {
-		throw new UnsupportedOperationException("CodeIndex.put for string not supported");
-	}
-
-	@Override
-	public synchronized void put(StringRef str, T value) {
-		if (str == null || str.length() == 0) {
-			return;
-		}
-		keys.add(str);
+	public synchronized void put(CodeNode value) {
 		values.add(value);
 	}
 
-	@Override
-	public boolean isStringRefSupported() {
-		return true;
+	public synchronized void removeForCls(JavaClass cls) {
+		values.removeIf(v -> v.getJavaNode().getTopParentClass().equals(cls));
 	}
 
-	private boolean isMatched(StringRef key, String str, boolean caseInsensitive) {
-		return key.indexOf(str, caseInsensitive) != -1;
+	private boolean isMatched(StringRef key, SearchSettings searchSettings) {
+		return searchSettings.isMatch(key);
 	}
 
-	@Override
-	public Flowable<T> search(final String searchStr, final boolean caseInsensitive) {
+	public Flowable<CodeNode> search(final SearchSettings searchSettings) {
+		JClass activeCls = searchSettings.getActiveCls();
 		return Flowable.create(emitter -> {
-			int size = size();
-			LOG.debug("Code search started: {} ...", searchStr);
-			for (int i = 0; i < size; i++) {
-				if (isMatched(keys.get(i), searchStr, caseInsensitive)) {
-					emitter.onNext(values.get(i));
+			LOG.debug("Code search started: {} ...", searchSettings.getSearchString());
+			for (CodeNode node : values) {
+				if (activeCls == null || node.getRootClass().equals(activeCls)) {
+					int pos = searchSettings.find(node.getLineStr());
+					if (pos > -1) {
+						emitter.onNext(node);
+					}
 				}
 				if (emitter.isCancelled()) {
-					LOG.debug("Code search canceled: {}", searchStr);
+					LOG.debug("Code search canceled: {}", searchSettings.getSearchString());
 					return;
 				}
 			}
-			LOG.debug("Code search complete: {}, memory usage: {}", searchStr, UiUtils.memoryInfo());
+			LOG.debug("Code search complete: {}, memory usage: {}", searchSettings.getSearchString(), UiUtils.memoryInfo());
 			emitter.onComplete();
-		}, BackpressureStrategy.LATEST);
+		}, BackpressureStrategy.BUFFER);
 	}
 
-	@Override
 	public int size() {
-		return keys.size();
+		return values.size();
 	}
 }

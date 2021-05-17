@@ -7,7 +7,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import jadx.core.dex.instructions.args.ArgType;
-import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.RootNode;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
@@ -37,13 +36,6 @@ public final class ClassInfo implements Comparable<ClassInfo> {
 		return root.getInfoStorage().putCls(newClsInfo);
 	}
 
-	public static ClassInfo fromDex(DexNode dex, int clsIndex) {
-		if (clsIndex == DexNode.NO_INDEX) {
-			throw new JadxRuntimeException("NO_INDEX for class");
-		}
-		return fromType(dex.root(), dex.getType(clsIndex));
-	}
-
 	public static ClassInfo fromName(RootNode root, String clsName) {
 		return fromType(root, ArgType.object(clsName));
 	}
@@ -70,6 +62,8 @@ public final class ClassInfo implements Comparable<ClassInfo> {
 			ClassAliasInfo newAlias = new ClassAliasInfo(getAliasPkg(), aliasName);
 			fillAliasFullName(newAlias);
 			this.alias = newAlias;
+		} else {
+			this.alias = null;
 		}
 	}
 

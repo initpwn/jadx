@@ -5,13 +5,15 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.api.ICodeInfo;
-import jadx.core.codegen.CodeWriter;
 import jadx.core.deobf.NameMapper;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.nodes.FieldNode;
@@ -24,6 +26,8 @@ import jadx.core.xmlgen.entry.ValuesParser;
 
 public class ResTableParser extends CommonBinaryParser {
 	private static final Logger LOG = LoggerFactory.getLogger(ResTableParser.class);
+
+	private static final Pattern VALID_RES_KEY_PATTERN = Pattern.compile("[\\w\\d_]+");
 
 	private static final class PackageChunk {
 		private final int id;
@@ -55,12 +59,21 @@ public class ResTableParser extends CommonBinaryParser {
 		}
 	}
 
+	/**
+	 * No renaming, pattern checking or name generation. Required for res-map.txt building
+	 */
+	private final boolean useRawResName;
 	private final RootNode root;
 	private final ResourceStorage resStorage = new ResourceStorage();
 	private String[] strings;
 
 	public ResTableParser(RootNode root) {
+		this(root, false);
+	}
+
+	public ResTableParser(RootNode root, boolean useRawResNames) {
 		this.root = root;
+		this.useRawResName = useRawResNames;
 	}
 
 	public void decode(InputStream inputStream) throws IOException {
@@ -72,31 +85,12 @@ public class ResTableParser extends CommonBinaryParser {
 	public ResContainer decodeFiles(InputStream inputStream) throws IOException {
 		decode(inputStream);
 
-		ValuesParser vp = new ValuesParser(root, strings, resStorage.getResourcesNames());
+		ValuesParser vp = new ValuesParser(strings, resStorage.getResourcesNames());
 		ResXmlGen resGen = new ResXmlGen(resStorage, vp);
 
-		ICodeInfo content = makeXmlDump();
+		ICodeInfo content = XmlGenUtils.makeXmlDump(root.makeCodeWriter(), resStorage);
 		List<ResContainer> xmlFiles = resGen.makeResourcesXml();
 		return ResContainer.resourceTable("res", xmlFiles, content);
-	}
-
-	public ICodeInfo makeXmlDump() {
-		CodeWriter writer = new CodeWriter();
-		writer.startLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-		writer.startLine("<resources>");
-		writer.incIndent();
-
-		Set<String> addedValues = new HashSet<>();
-		for (ResourceEntry ri : resStorage.getResources()) {
-			if (addedValues.add(ri.getTypeName() + '.' + ri.getKeyName())) {
-				String format = String.format("<public type=\"%s\" name=\"%s\" id=\"%s\" />",
-						ri.getTypeName(), ri.getKeyName(), ri.getId());
-				writer.startLine(format);
-			}
-		}
-		writer.decIndent();
-		writer.startLine("</resources>");
-		return writer.finish();
 	}
 
 	public ResourceStorage getResStorage() {
@@ -241,12 +235,12 @@ public class ResTableParser extends CommonBinaryParser {
 		is.checkPos(entriesStart, "Expected entry start");
 		for (int i = 0; i < entryCount; i++) {
 			if (entryIndexes[i] != NO_ENTRY) {
-				parseEntry(pkg, id, i, config);
+				parseEntry(pkg, id, i, config.getQualifiers());
 			}
 		}
 	}
 
-	private void parseEntry(PackageChunk pkg, int typeId, int entryId, EntryConfig config) throws IOException {
+	private void parseEntry(PackageChunk pkg, int typeId, int entryId, String config) throws IOException {
 		int size = is.readInt16();
 		int flags = is.readInt16();
 		int key = is.readInt32();
@@ -256,32 +250,70 @@ public class ResTableParser extends CommonBinaryParser {
 
 		int resRef = pkg.getId() << 24 | typeId << 16 | entryId;
 		String typeName = pkg.getTypeStrings()[typeId - 1];
-		String keyName = pkg.getKeyStrings()[key];
-		if (keyName.isEmpty()) {
-			FieldNode constField = root.getConstValues().getGlobalConstFields().get(resRef);
-			if (constField != null) {
-				keyName = constField.getName();
-				constField.add(AFlag.DONT_RENAME);
-			} else {
-				keyName = "RES_" + resRef; // autogenerate key name
-			}
+		String origKeyName = pkg.getKeyStrings()[key];
+		ResourceEntry newResEntry = new ResourceEntry(resRef, pkg.getName(), typeName, getResName(resRef, origKeyName), config);
+		ResourceEntry prevResEntry = resStorage.searchEntryWithSameName(newResEntry);
+		if (prevResEntry != null) {
+			newResEntry = newResEntry.copyWithId();
+
+			// rename also previous entry for consistency
+			ResourceEntry replaceForPrevEntry = prevResEntry.copyWithId();
+			resStorage.replace(prevResEntry, replaceForPrevEntry);
+			resStorage.addRename(replaceForPrevEntry);
 		}
-		ResourceEntry ri = new ResourceEntry(resRef, pkg.getName(), typeName, keyName);
-		ri.setConfig(config);
+		if (!Objects.equals(origKeyName, newResEntry.getKeyName())) {
+			resStorage.addRename(newResEntry);
+		}
 
 		if ((flags & FLAG_COMPLEX) != 0 || size == 16) {
 			int parentRef = is.readInt32();
 			int count = is.readInt32();
-			ri.setParentRef(parentRef);
+			newResEntry.setParentRef(parentRef);
 			List<RawNamedValue> values = new ArrayList<>(count);
 			for (int i = 0; i < count; i++) {
 				values.add(parseValueMap());
 			}
-			ri.setNamedValues(values);
+			newResEntry.setNamedValues(values);
 		} else {
-			ri.setSimpleValue(parseValue());
+			newResEntry.setSimpleValue(parseValue());
 		}
-		resStorage.add(ri);
+		resStorage.add(newResEntry);
+	}
+
+	private String getResName(int resRef, String origKeyName) {
+		if (this.useRawResName) {
+			return origKeyName;
+		}
+		String renamedKey = resStorage.getRename(resRef);
+		if (renamedKey != null) {
+			return renamedKey;
+		}
+		if (VALID_RES_KEY_PATTERN.matcher(origKeyName).matches()) {
+			return origKeyName;
+		}
+		FieldNode constField = root.getConstValues().getGlobalConstFields().get(resRef);
+		if (constField != null) {
+			constField.add(AFlag.DONT_RENAME);
+			return constField.getName();
+		}
+		// Making sure origKeyName compliant with resource file name rules
+		Matcher m = VALID_RES_KEY_PATTERN.matcher(origKeyName);
+		StringBuilder sb = new StringBuilder();
+		boolean first = true;
+		while (m.find()) {
+			if (!first) {
+				sb.append("_");
+			}
+			sb.append(m.group());
+			first = false;
+		}
+		// autogenerate key name, appended with cleaned origKeyName to be human-friendly
+		String newResName = "res_" + resRef;
+		String cleanedResName = sb.toString();
+		if (!cleanedResName.isEmpty()) {
+			newResName += "_" + cleanedResName.toLowerCase();
+		}
+		return newResName;
 	}
 
 	private RawNamedValue parseValueMap() throws IOException {

@@ -1,14 +1,14 @@
 package jadx.core.dex.visitors;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.jetbrains.annotations.Nullable;
-
-import com.google.common.collect.Streams;
 
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
@@ -58,11 +58,10 @@ public class PrepareForCodeGen extends AbstractVisitor {
 
 	@Override
 	public void visit(MethodNode mth) throws JadxException {
-		List<BlockNode> blocks = mth.getBasicBlocks();
-		if (blocks == null) {
+		if (mth.isNoCode()) {
 			return;
 		}
-		for (BlockNode block : blocks) {
+		for (BlockNode block : mth.getBasicBlocks()) {
 			if (block.contains(AFlag.DONT_GENERATE)) {
 				continue;
 			}
@@ -266,11 +265,8 @@ public class PrepareForCodeGen extends AbstractVisitor {
 		for (ClassNode innerClass : cls.getInnerClasses()) {
 			setClassSourceLine(innerClass);
 		}
-
-		int minLine = Streams.concat(
-				cls.getMethods().stream(),
-				cls.getInnerClasses().stream(),
-				cls.getFields().stream())
+		int minLine = Stream.of(cls.getMethods(), cls.getInnerClasses(), cls.getFields())
+				.flatMap(Collection::stream)
 				.filter(mth -> !mth.contains(AFlag.DONT_GENERATE))
 				.filter(mth -> mth.getSourceLine() != 0)
 				.mapToInt(LineAttrNode::getSourceLine)

@@ -19,6 +19,8 @@ import jadx.core.dex.nodes.IBranchRegion;
 import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
 import jadx.core.dex.nodes.InsnNode;
+import jadx.core.dex.nodes.MethodNode;
+import jadx.core.dex.regions.Region;
 import jadx.core.dex.trycatch.CatchAttr;
 import jadx.core.dex.trycatch.ExceptionHandler;
 import jadx.core.dex.trycatch.TryCatchBlock;
@@ -51,6 +53,28 @@ public class RegionUtils {
 			IRegion region = (IRegion) container;
 			List<IContainer> blocks = region.getSubBlocks();
 			return !blocks.isEmpty() && hasExitEdge(blocks.get(blocks.size() - 1));
+		} else {
+			throw new JadxRuntimeException(unknownContainerType(container));
+		}
+	}
+
+	public static InsnNode getFirstInsn(IContainer container) {
+		if (container instanceof IBlock) {
+			IBlock block = (IBlock) container;
+			List<InsnNode> insnList = block.getInstructions();
+			if (insnList.isEmpty()) {
+				return null;
+			}
+			return insnList.get(0);
+		} else if (container instanceof IBranchRegion) {
+			return null;
+		} else if (container instanceof IRegion) {
+			IRegion region = (IRegion) container;
+			List<IContainer> blocks = region.getSubBlocks();
+			if (blocks.isEmpty()) {
+				return null;
+			}
+			return getFirstInsn(blocks.get(0));
 		} else {
 			throw new JadxRuntimeException(unknownContainerType(container));
 		}
@@ -327,6 +351,26 @@ public class RegionUtils {
 		} else {
 			throw new JadxRuntimeException(unknownContainerType(container));
 		}
+	}
+
+	/**
+	 * Check if two blocks in same region on same level
+	 * TODO: Add 'region' annotation to all blocks to speed up checks
+	 */
+	public static boolean isBlocksInSameRegion(MethodNode mth, BlockNode firstBlock, BlockNode secondBlock) {
+		Region region = mth.getRegion();
+		if (region == null) {
+			return false;
+		}
+		IContainer firstContainer = getBlockContainer(region, firstBlock);
+		if (firstContainer instanceof IRegion) {
+			if (firstContainer instanceof IBranchRegion) {
+				return false;
+			}
+			List<IContainer> subBlocks = ((IRegion) firstContainer).getSubBlocks();
+			return subBlocks.contains(secondBlock);
+		}
+		return false;
 	}
 
 	public static boolean isDominatedBy(BlockNode dom, IContainer cont) {

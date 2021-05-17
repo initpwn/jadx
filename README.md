@@ -1,18 +1,18 @@
+<img src="https://raw.githubusercontent.com/skylot/jadx/master/jadx-gui/src/main/resources/logos/jadx-logo.png" width="64" align="left" />
+
 ## JADX
 
-[![Build Status](https://travis-ci.org/skylot/jadx.png?branch=master)](https://travis-ci.org/skylot/jadx)
-[![Code Coverage](https://codecov.io/gh/skylot/jadx/branch/master/graph/badge.svg)](https://codecov.io/gh/skylot/jadx)
+[![Build status](https://github.com/skylot/jadx/workflows/Build/badge.svg)](https://github.com/skylot/jadx/actions?query=workflow%3ABuild)
 [![Alerts from lgtm.com](https://img.shields.io/lgtm/alerts/g/skylot/jadx.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/skylot/jadx/alerts/)
-[![SonarQube Bugs](https://sonarcloud.io/api/project_badges/measure?project=jadx&metric=bugs)](https://sonarcloud.io/dashboard?id=jadx)
-[![License](http://img.shields.io/:license-apache-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0.html)
 [![semantic-release](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
+[![License](http://img.shields.io/:license-apache-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0.html)
 
 **jadx** - Dex to Java decompiler
 
-Command line and GUI tools for produce Java source code from Android Dex and Apk files
+Command line and GUI tools for producing Java source code from Android Dex and Apk files
 
 **Main features:**
-- decompile Dalvik bytecode to java classes from APK, dex, aar and zip files
+- decompile Dalvik bytecode to java classes from APK, dex, aar, aab and zip files
 - decode `AndroidManifest.xml` and other resources from `resources.arsc`
 - deobfuscator included
 
@@ -22,6 +22,9 @@ Command line and GUI tools for produce Java source code from Android Dex and Apk
 - find usage
 - full text search
 
+**Upcoming unstable features:**
+- smali debugger (thanks to [@LBJ-the-GOAT](https://github.com/LBJ-the-GOAT)), check [wiki page](https://github.com/skylot/jadx/wiki/Smali-debugger) for setup and usage
+
 See these features in action here: [jadx-gui features overview](https://github.com/skylot/jadx/wiki/jadx-gui-features-overview)
 
 
@@ -29,9 +32,8 @@ See these features in action here: [jadx-gui features overview](https://github.c
 
 
 ### Download
-- latest [unstable build: ![Download](https://api.bintray.com/packages/skylot/jadx/unstable/images/download.svg) ](https://bintray.com/skylot/jadx/unstable/_latestVersion#files)
 - release from [github: ![Latest release](https://img.shields.io/github/release/skylot/jadx.svg)](https://github.com/skylot/jadx/releases/latest)
-- release from [bintray: ![Download](https://api.bintray.com/packages/skylot/jadx/releases/images/download.svg) ](https://bintray.com/skylot/jadx/releases/_latestVersion#files)
+- latest [unstable build](https://nightly.link/skylot/jadx/workflows/build/master)
 
 After download unpack zip file go to `bin` directory and run:
 - `jadx` - command line version
@@ -66,7 +68,7 @@ and also packed to `build/jadx-<version>.zip`
 
 ### Usage
 ```
-jadx[-gui] [options] <input file> (.apk, .dex, .jar, .class, .smali, .zip, .aar, .arsc)
+jadx[-gui] [options] <input file> (.apk, .dex, .jar, .class, .smali, .zip, .aar, .arsc, .aab)
 options:
   -d, --output-dir                    - output directory
   -ds, --output-dir-src               - output directory for sources
@@ -87,8 +89,10 @@ options:
   --deobf                             - activate deobfuscation
   --deobf-min                         - min length of name, renamed if shorter, default: 3
   --deobf-max                         - max length of name, renamed if longer, default: 64
+  --deobf-cfg-file                    - deobfuscation map file, default: same dir and name as input file with '.jobf' extension
   --deobf-rewrite-cfg                 - force to save deobfuscation map
   --deobf-use-sourcename              - use source file name as class name alias
+  --deobf-parse-kotlin-metadata       - parse kotlin metadata to class and package names
   --rename-flags                      - what to rename, comma-separated, 'case' for system case sensitivity, 'valid' for java identifiers, 'printable' characters, 'none' or 'all' (default)
   --fs-case-sensitive                 - treat filesystem as case sensitive, false by default
   --cfg                               - save methods control flow graph to dot file
@@ -115,9 +119,6 @@ To support this project you can:
   - Post thoughts about new features/optimizations that important to you
   - Submit decompilation issues, please read before proceed: [Open issue](CONTRIBUTING.md#Open-Issue)
   - Open pull request, please follow these rules: [Pull Request Process](CONTRIBUTING.md#Pull-Request-Process)
-
-### Related projects:
-- [PyJadx](https://github.com/romainthomas/pyjadx) - python binding for jadx by [@romainthomas](https://github.com/romainthomas)
 
 ---------------------------------------
 *Licensed under the Apache 2.0 License*

@@ -1,18 +1,18 @@
 package jadx.core.dex.instructions.args;
 
+import java.util.Objects;
+
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.android.dx.io.instructions.DecodedInstruction;
-
+import jadx.api.plugins.input.insns.InsnData;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.instructions.InsnType;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.utils.InsnRemover;
-import jadx.core.utils.InsnUtils;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
 /**
@@ -30,19 +30,19 @@ public abstract class InsnArg extends Typed {
 		return new RegisterArg(regNum, type);
 	}
 
-	public static RegisterArg reg(DecodedInstruction insn, int argNum, ArgType type) {
-		return reg(InsnUtils.getArg(insn, argNum), type);
+	public static RegisterArg reg(InsnData insn, int argNum, ArgType type) {
+		return reg(insn.getReg(argNum), type);
 	}
 
-	public static RegisterArg typeImmutableIfKnownReg(DecodedInstruction insn, int argNum, ArgType type) {
+	public static RegisterArg typeImmutableIfKnownReg(InsnData insn, int argNum, ArgType type) {
 		if (type.isTypeKnown()) {
-			return typeImmutableReg(InsnUtils.getArg(insn, argNum), type);
+			return typeImmutableReg(insn.getReg(argNum), type);
 		}
-		return reg(InsnUtils.getArg(insn, argNum), type);
+		return reg(insn.getReg(argNum), type);
 	}
 
-	public static RegisterArg typeImmutableReg(DecodedInstruction insn, int argNum, ArgType type) {
-		return typeImmutableReg(InsnUtils.getArg(insn, argNum), type);
+	public static RegisterArg typeImmutableReg(InsnData insn, int argNum, ArgType type) {
+		return typeImmutableReg(insn.getReg(argNum), type);
 	}
 
 	public static RegisterArg typeImmutableReg(int regNum, ArgType type) {
@@ -58,10 +58,10 @@ public abstract class InsnArg extends Typed {
 	}
 
 	public static LiteralArg lit(long literal, ArgType type) {
-		return new LiteralArg(literal, type);
+		return LiteralArg.makeWithFixedType(literal, type);
 	}
 
-	public static LiteralArg lit(DecodedInstruction insn, ArgType type) {
+	public static LiteralArg lit(InsnData insn, ArgType type) {
 		return lit(insn.getLiteral(), type);
 	}
 
@@ -208,8 +208,32 @@ public abstract class InsnArg extends Typed {
 		return arg;
 	}
 
+	public boolean isZeroLiteral() {
+		return isLiteral() && (((LiteralArg) this)).getLiteral() == 0;
+	}
+
+	public boolean isFalse() {
+		if (isLiteral()) {
+			LiteralArg litArg = (LiteralArg) this;
+			return litArg.getLiteral() == 0 && Objects.equals(litArg.getType(), ArgType.BOOLEAN);
+		}
+		return false;
+	}
+
+	public boolean isTrue() {
+		if (isLiteral()) {
+			LiteralArg litArg = (LiteralArg) this;
+			return litArg.getLiteral() == 1 && Objects.equals(litArg.getType(), ArgType.BOOLEAN);
+		}
+		return false;
+	}
+
 	public boolean isThis() {
 		return contains(AFlag.THIS);
+	}
+
+	public boolean isConst() {
+		return isLiteral() || (isInsnWrap() && ((InsnWrapArg) this).getWrapInsn().isConstInsn());
 	}
 
 	protected final <T extends InsnArg> T copyCommonParams(T copy) {

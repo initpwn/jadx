@@ -16,8 +16,8 @@ import java.util.function.Function;
 
 import org.jetbrains.annotations.Nullable;
 
+import jadx.api.ICodeWriter;
 import jadx.api.JadxDecompiler;
-import jadx.core.codegen.CodeWriter;
 import jadx.core.dex.visitors.DepthTraversal;
 
 public class Utils {
@@ -58,7 +58,7 @@ public class Utils {
 		if (objects == null) {
 			return "";
 		}
-		return listToString(objects, joiner, Object::toString);
+		return listToString(objects, joiner, Objects::toString);
 	}
 
 	public static <T> String listToString(Iterable<T> objects, Function<T, String> toStr) {
@@ -101,6 +101,18 @@ public class Utils {
 		return sb.toString();
 	}
 
+	public static String concatStrings(List<String> list) {
+		if (isEmpty(list)) {
+			return "";
+		}
+		if (list.size() == 1) {
+			return list.get(0);
+		}
+		StringBuilder sb = new StringBuilder();
+		list.forEach(sb::append);
+		return sb.toString();
+	}
+
 	public static String getStackTrace(Throwable throwable) {
 		if (throwable == null) {
 			return "";
@@ -112,7 +124,7 @@ public class Utils {
 		return sw.getBuffer().toString();
 	}
 
-	public static void appendStackTrace(CodeWriter code, Throwable throwable) {
+	public static void appendStackTrace(ICodeWriter code, Throwable throwable) {
 		if (throwable == null) {
 			return;
 		}
@@ -170,6 +182,17 @@ public class Utils {
 			}
 			prevElement = stackTraceElement;
 		}
+		// stop condition not found -> just cut tail to any jadx class
+		for (int i = length - 1; i >= 0; i--) {
+			String clsName = stackTrace[i].getClassName();
+			if (clsName.startsWith("jadx.")) {
+				if (clsName.startsWith("jadx.tests.")) {
+					continue;
+				}
+				th.setStackTrace(Arrays.copyOfRange(stackTrace, 0, i));
+				return;
+			}
+		}
 	}
 
 	public static <T, R> List<R> collectionMap(Collection<T> list, Function<T, R> mapFunc) {
@@ -219,6 +242,33 @@ public class Utils {
 		return new ImmutableList<>(list);
 	}
 
+	/**
+	 * Sub list from startIndex (inclusive) to list end
+	 */
+	public static <T> List<T> listTail(List<T> list, int startIndex) {
+		if (startIndex == 0) {
+			return list;
+		}
+		int size = list.size();
+		if (startIndex >= size) {
+			return Collections.emptyList();
+		}
+		return list.subList(startIndex, size);
+	}
+
+	public static <T> List<T> mergeLists(List<T> first, List<T> second) {
+		if (isEmpty(first)) {
+			return second;
+		}
+		if (isEmpty(second)) {
+			return first;
+		}
+		List<T> result = new ArrayList<>(first.size() + second.size());
+		result.addAll(first);
+		result.addAll(second);
+		return result;
+	}
+
 	public static Map<String, String> newConstStringMap(String... parameters) {
 		int len = parameters.length;
 		if (len == 0) {
@@ -234,6 +284,22 @@ public class Utils {
 		return Collections.unmodifiableMap(result);
 	}
 
+	/**
+	 * Merge two maps. Return HashMap as result. Second map will override values from first map.
+	 */
+	public static <K, V> Map<K, V> mergeMaps(Map<K, V> first, Map<K, V> second) {
+		if (isEmpty(first)) {
+			return second;
+		}
+		if (isEmpty(second)) {
+			return first;
+		}
+		Map<K, V> result = new HashMap<>(first.size() + second.size());
+		result.putAll(first);
+		result.putAll(second);
+		return result;
+	}
+
 	@Nullable
 	public static <T> T getOne(@Nullable List<T> list) {
 		if (list == null || list.size() != 1) {
@@ -243,11 +309,42 @@ public class Utils {
 	}
 
 	@Nullable
+	public static <T> T first(List<T> list) {
+		if (list.isEmpty()) {
+			return null;
+		}
+		return list.get(0);
+	}
+
+	@Nullable
+	public static <T> T first(Iterable<T> list) {
+		Iterator<T> it = list.iterator();
+		if (!it.hasNext()) {
+			return null;
+		}
+		return it.next();
+	}
+
+	@Nullable
 	public static <T> T last(List<T> list) {
 		if (list.isEmpty()) {
 			return null;
 		}
 		return list.get(list.size() - 1);
+	}
+
+	@Nullable
+	public static <T> T last(Iterable<T> list) {
+		Iterator<T> it = list.iterator();
+		if (!it.hasNext()) {
+			return null;
+		}
+		while (true) {
+			T next = it.next();
+			if (!it.hasNext()) {
+				return next;
+			}
+		}
 	}
 
 	public static <T> T getOrElse(@Nullable T obj, T defaultObj) {
@@ -263,6 +360,10 @@ public class Utils {
 
 	public static <T> boolean notEmpty(Collection<T> col) {
 		return col != null && !col.isEmpty();
+	}
+
+	public static <K, V> boolean isEmpty(Map<K, V> map) {
+		return map == null || map.isEmpty();
 	}
 
 	public static <T> boolean isEmpty(T[] arr) {

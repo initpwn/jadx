@@ -4,7 +4,7 @@ public interface IDexNode {
 
 	String typeName();
 
-	DexNode dex();
-
 	RootNode root();
+
+	String getInputFileName();
 }

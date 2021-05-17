@@ -1,6 +1,11 @@
 package jadx.gui.ui;
 
-import java.awt.*;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Cursor;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Rectangle;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -13,14 +18,27 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.swing.*;
+import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JDialog;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.ListSelectionModel;
+import javax.swing.ScrollPaneConstants;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.TableCellRenderer;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableColumnModel;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
-import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.SearchContext;
 import org.fife.ui.rtextarea.SearchEngine;
 import org.jetbrains.annotations.NotNull;
@@ -32,10 +50,12 @@ import jadx.gui.jobs.BackgroundJob;
 import jadx.gui.jobs.BackgroundWorker;
 import jadx.gui.jobs.DecompileJob;
 import jadx.gui.treemodel.JNode;
+import jadx.gui.treemodel.JResSearchNode;
 import jadx.gui.ui.codearea.AbstractCodeArea;
 import jadx.gui.utils.CacheObject;
 import jadx.gui.utils.JumpPosition;
 import jadx.gui.utils.NLS;
+import jadx.gui.utils.UiUtils;
 import jadx.gui.utils.search.TextSearchIndex;
 
 public abstract class CommonSearchDialog extends JDialog {
@@ -58,6 +78,7 @@ public abstract class CommonSearchDialog extends JDialog {
 
 	protected String highlightText;
 	protected boolean highlightTextCaseInsensitive = false;
+	protected boolean highlightTextUseRegex = false;
 
 	public CommonSearchDialog(MainWindow mainWindow) {
 		super(mainWindow);
@@ -74,7 +95,9 @@ public abstract class CommonSearchDialog extends JDialog {
 	protected abstract void loadStart();
 
 	public void loadWindowPos() {
-		mainWindow.getSettings().loadWindowPos(this);
+		if (!mainWindow.getSettings().loadWindowPos(this)) {
+			setSize(800, 500);
+		}
 	}
 
 	public void prepare() {
@@ -107,10 +130,17 @@ public abstract class CommonSearchDialog extends JDialog {
 		if (selectedId == -1) {
 			return;
 		}
+		JumpPosition jmpPos;
 		JNode node = (JNode) resultsModel.getValueAt(selectedId, 0);
-		tabbedPane.codeJump(new JumpPosition(node.getRootClass(), node.getLine()));
-
-		dispose();
+		if (node instanceof JResSearchNode) {
+			jmpPos = new JumpPosition(((JResSearchNode) node).getResNode(), node.getLine(), node.getPos());
+		} else {
+			jmpPos = new JumpPosition(node.getRootClass(), node.getLine(), node.getPos());
+		}
+		tabbedPane.codeJump(jmpPos);
+		if (!mainWindow.getSettings().getKeepCommonDialogOpen()) {
+			dispose();
+		}
 	}
 
 	@Override
@@ -120,8 +150,7 @@ public abstract class CommonSearchDialog extends JDialog {
 	}
 
 	protected void initCommon() {
-		KeyStroke stroke = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
-		getRootPane().registerKeyboardAction(e -> dispose(), stroke, JComponent.WHEN_IN_FOCUSED_WINDOW);
+		UiUtils.addEscapeShortCutToDispose(this);
 	}
 
 	@NotNull
@@ -137,6 +166,15 @@ public abstract class CommonSearchDialog extends JDialog {
 		JPanel buttonPane = new JPanel();
 		buttonPane.setLayout(new BoxLayout(buttonPane, BoxLayout.LINE_AXIS));
 		buttonPane.setBorder(BorderFactory.createEmptyBorder(0, 10, 10, 10));
+
+		JCheckBox cbKeepOpen = new JCheckBox(NLS.str("search_dialog.keep_open"));
+		cbKeepOpen.setSelected(mainWindow.getSettings().getKeepCommonDialogOpen());
+		cbKeepOpen.addActionListener(e -> {
+			mainWindow.getSettings().setKeepCommonDialogOpen(cbKeepOpen.isSelected());
+			mainWindow.getSettings().sync();
+		});
+		buttonPane.add(cbKeepOpen);
+		buttonPane.add(Box.createRigidArea(new Dimension(15, 0)));
 		buttonPane.add(progressPane);
 		buttonPane.add(Box.createRigidArea(new Dimension(5, 0)));
 		buttonPane.add(Box.createHorizontalGlue());
@@ -240,6 +278,10 @@ public abstract class CommonSearchDialog extends JDialog {
 		resultsInfoLabel.setText(statusText);
 	}
 
+	protected void showSearchState() {
+		resultsInfoLabel.setText(NLS.str("search_dialog.tip_searching"));
+	}
+
 	protected static class ResultsTable extends JTable {
 		private static final long serialVersionUID = 3901184054736618969L;
 		private final transient ResultsTableCellRenderer renderer;
@@ -257,11 +299,11 @@ public abstract class CommonSearchDialog extends JDialog {
 			int firstColMaxWidth = (int) (width * 0.5);
 			int rowCount = getRowCount();
 			int columnCount = getColumnCount();
-			if (!model.isAddDescColumn()) {
+			boolean addDescColumn = model.isAddDescColumn();
+			if (!addDescColumn) {
 				firstColMaxWidth = width;
 			}
-			Component nodeComp = null;
-			Component codeComp = null;
+			setRowHeight(10); // reset all rows height
 			for (int col = 0; col < columnCount; col++) {
 				int colWidth = 50;
 				for (int row = 0; row < rowCount; row++) {
@@ -270,11 +312,9 @@ public abstract class CommonSearchDialog extends JDialog {
 						continue;
 					}
 					colWidth = Math.max(comp.getPreferredSize().width, colWidth);
-					if (nodeComp == null && col == 0) {
-						nodeComp = comp;
-					}
-					if (codeComp == null && col == 1) {
-						codeComp = comp;
+					int h = Math.max(getRowHeight(row), getHeight(comp));
+					if (h > 1) {
+						setRowHeight(row, h);
 					}
 				}
 				colWidth += 10;
@@ -286,10 +326,7 @@ public abstract class CommonSearchDialog extends JDialog {
 				TableColumn column = columnModel.getColumn(col);
 				column.setPreferredWidth(colWidth);
 			}
-			// setRowHeight(Math.max(nodeComp.getPreferredSize().height, codeComp.getPreferredSize().height +
-			// 4));
 			updateUI();
-			setRowHeight(Math.max(getHeight(nodeComp), getHeight(codeComp) + 4));
 		}
 
 		private int getHeight(@Nullable Component nodeComp) {
@@ -412,7 +449,7 @@ public abstract class CommonSearchDialog extends JDialog {
 		@Override
 		public Component getTableCellRendererComponent(JTable table, Object obj, boolean isSelected,
 				boolean hasFocus, int row, int column) {
-			int id = row << 2 | column;
+			int id = makeID(row, column);
 			Component comp = componentCache.get(id);
 			if (comp == null) {
 				if (obj instanceof JNode) {
@@ -424,6 +461,10 @@ public abstract class CommonSearchDialog extends JDialog {
 			}
 			updateSelection(table, comp, isSelected);
 			return comp;
+		}
+
+		private int makeID(int row, int col) {
+			return row << 2 | col;
 		}
 
 		private void updateSelection(JTable table, Component comp, boolean isSelected) {
@@ -455,19 +496,25 @@ public abstract class CommonSearchDialog extends JDialog {
 			if (!node.hasDescString()) {
 				return emptyLabel;
 			}
+
 			RSyntaxTextArea textArea = AbstractCodeArea.getDefaultArea(mainWindow);
-			textArea.setLayout(new GridLayout(1, 1));
-			textArea.setEditable(false);
-			textArea.setSyntaxEditingStyle(SyntaxConstants.SYNTAX_STYLE_JAVA);
-			textArea.setText("  " + node.makeDescString());
-			textArea.setRows(1);
-			textArea.setColumns(textArea.getText().length() + 1);
+			textArea.setSyntaxEditingStyle(node.getSyntaxName());
+			String descStr = node.makeDescString();
+			textArea.setText(descStr);
+			if (descStr.contains("\n")) {
+				textArea.setRows(textArea.getLineCount());
+			} else {
+				textArea.setRows(1);
+				textArea.setColumns(descStr.length() + 1);
+			}
 			if (highlightText != null) {
 				SearchContext searchContext = new SearchContext(highlightText);
 				searchContext.setMatchCase(!highlightTextCaseInsensitive);
+				searchContext.setRegularExpression(highlightTextUseRegex);
 				searchContext.setMarkAll(true);
 				SearchEngine.markAll(textArea, searchContext);
 			}
+			textArea.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
 			return textArea;
 		}
 
@@ -516,17 +563,15 @@ public abstract class CommonSearchDialog extends JDialog {
 		}
 	}
 
-	protected void loadStartCommon() {
+	private void loadStartCommon() {
 		setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 		progressPane.setIndeterminate(true);
 		progressPane.setVisible(true);
-		resultsTable.setEnabled(false);
 		warnLabel.setVisible(false);
 	}
 
 	private void loadFinishedCommon() {
 		setCursor(null);
-		resultsTable.setEnabled(true);
 		progressPane.setVisible(false);
 
 		TextSearchIndex textIndex = cache.getTextIndex();

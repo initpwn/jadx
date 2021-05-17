@@ -2,7 +2,7 @@ package jadx.core.dex.attributes;
 
 import java.util.List;
 
-import jadx.core.dex.attributes.annotations.Annotation;
+import jadx.api.plugins.input.data.annotations.IAnnotation;
 
 public interface IAttributeNode {
 
@@ -14,13 +14,17 @@ public interface IAttributeNode {
 
 	void copyAttributesFrom(AttrNode attrNode);
 
+	<T extends IAttribute> void copyAttributeFrom(AttrNode attrNode, AType<T> attrType);
+
+	<T extends IAttribute> void rewriteAttributeFrom(AttrNode attrNode, AType<T> attrType);
+
 	boolean contains(AFlag flag);
 
 	<T extends IAttribute> boolean contains(AType<T> type);
 
 	<T extends IAttribute> T get(AType<T> type);
 
-	Annotation getAnnotation(String cls);
+	IAnnotation getAnnotation(String cls);
 
 	<T> List<T> getAll(AType<AttrList<T>> type);
 
